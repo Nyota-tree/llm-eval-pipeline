@@ -178,8 +178,23 @@ cd llm-eval-pipeline
 pip install -r requirements.txt
 
 # 配置环境变量
+# Linux/Mac:
 cp .env.example .env
-# 编辑 .env 文件填入你的 API Key
+
+# Windows PowerShell:
+Copy-Item .env.example .env
+
+# 或者手动创建 .env 文件，内容如下：
+# DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxx
+# 或
+# OPENAI_API_KEY=sk-xxxxxxxxxxxxx
+# 或
+# ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxx
+
+# ⚠️ Windows 用户注意：
+# 如果使用 PowerShell 创建 .env 文件，请使用以下命令确保 UTF-8 编码：
+# [System.IO.File]::WriteAllText(".env", "DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxx", [System.Text.Encoding]::UTF8)
+# 不要使用 echo 命令，因为它可能使用错误的编码（UTF-16），导致读取失败
 ```
 
 ### 2. 配置参数
@@ -250,6 +265,195 @@ python batch_evaluator.py batch_output.csv batch_evaluation_results.csv
 
 ## 🔧 详细使用指南
 
+### 📌 优先级系统说明 (P0-P4)
+
+项目使用**两套独立的优先级系统**来标记内容：**生成器优先级**（输入重要性）和**评估器优先级**（输出质量）。理解这两套系统的区别对于高效使用本工具至关重要。
+
+#### 🎯 快速参考表
+
+**优先级含义速查**：
+
+| 优先级 | 生成器优先级<br/>(输入重要性) | 评估器优先级<br/>(输出质量) | 典型场景示例 | 建议操作 |
+|--------|:------------------------:|:------------------------:|:-----------|:--------|
+| **P0** | ⭐⭐⭐⭐⭐<br/>极其重要或紧急 | ⭐⭐⭐⭐⭐<br/>最高质量，可直接发布 | 生成器：关键业务决策、VIP客户咨询<br/>评估器：加权总分≥90，各维度优秀 | 优先处理/直接发布 |
+| **P1** | ⭐⭐⭐⭐<br/>重要内容 | ⭐⭐⭐⭐<br/>高质量，建议发布 | 生成器：重要客户咨询、核心功能相关<br/>评估器：加权总分80-89，质量良好 | 重点关注/通常可发布 |
+| **P2** | ⭐⭐⭐<br/>常规内容 | ⭐⭐⭐<br/>中等质量，需要复核 | 生成器：普通用户请求、日常业务<br/>评估器：加权总分70-79，部分维度不足 | 标准处理/人工复核 |
+| **P3** | ⭐⭐<br/>次要内容 | ⭐⭐<br/>低质量，不建议发布 | 生成器：辅助信息、非核心功能<br/>评估器：加权总分<70，存在明显问题 | 低优先级/不建议发布 |
+| **P4** | ⚠️<br/>无法判定或错误<br/>（仅生成器） | ❌<br/>不使用<br/>（仅评估器） | 生成器提取失败、处理出错 | 检查错误/重新处理 |
+
+**核心区别**：
+- **生成器优先级**：根据**输入内容（原文）的重要性**判定，在生成阶段由生成器自动判定，用于指导生成器如何处理输入
+- **评估器优先级**：根据**输出内容（生成结果）的质量**判定，在评估阶段由评估器重新判定，用于评估生成内容的质量
+- **两者可能不同**：输入重要（P0）不代表输出质量高（可能是 P2），反之亦然
+- **判定时机**：生成器优先级在生成阶段就判定了，是对原文的判定；评估器优先级在评估阶段判定，是对生成结果的判定
+
+#### 📝 生成器优先级详解 (Generator Priority: P0-P4)
+
+生成器在生成内容时，会根据**输入内容（原文）的重要性和复杂度**自动判定优先级。这个优先级保存在 CSV 的 `eval_priority` 列中。
+
+**工作原理**：
+1. 生成器接收 `input_text`（原文/输入内容）
+2. 分析输入内容，判断其重要性和紧急程度
+3. 在生成响应时，输出 `<priority>P{x}</priority>` 标签
+4. 这个优先级反映的是**输入内容的重要性**，而不是生成内容的质量
+
+**重要提示**：生成器优先级是在生成阶段就判定的，是对**原文（输入）**的优先级判定，用于指导生成器如何处理这个输入。
+
+**优先级详细说明**：
+
+| 优先级 | 含义 | 典型场景 | 判定标准 | 在 CSV 中的位置 |
+|--------|------|----------|----------|--------------|
+| **P0** | 最高优先级<br/>⭐⭐⭐⭐⭐ | • 关键业务决策<br/>• 高价值用户请求<br/>• 紧急问题处理<br/>• VIP 客户咨询<br/>• 涉及重大利益的内容 | 极其重要或紧急，需要最高质量输出 | `eval_priority` 列 |
+| **P1** | 高优先级<br/>⭐⭐⭐⭐ | • 重要客户咨询<br/>• 核心功能相关<br/>• 高价值内容生成<br/>• 重要业务场景<br/>• 需要高质量处理的内容 | 重要内容，需要高质量输出 | `eval_priority` 列 |
+| **P2** | 中优先级<br/>⭐⭐⭐ | • 普通用户请求<br/>• 常规内容生成<br/>• 标准流程处理<br/>• 日常业务<br/>• **最常见的情况** | 常规内容，标准质量输出（最常见） | `eval_priority` 列 |
+| **P3** | 低优先级<br/>⭐⭐ | • 辅助信息<br/>• 补充内容<br/>• 非核心功能<br/>• 次要场景<br/>• 可接受较低质量的内容 | 次要内容，可接受较低质量 | `eval_priority` 列 |
+| **P4** | 默认/错误<br/>⚠️ | • 无法判定优先级<br/>• 生成器提取失败<br/>• 处理出错<br/>• 输出格式不符合预期 | 兜底优先级，生成器无法提取时的默认值 | `eval_priority` 列 |
+
+**如何查看**：在 `batch_generator.py` 的输出 CSV 中，查看 `eval_priority` 列。
+
+**自定义判定标准**：在 `config.py` 的 `SYSTEM_PROMPT` 中定义生成器如何判定 P0-P4。例如：
+```python
+SYSTEM_PROMPT = """...
+根据输入内容（原文）的重要性，输出优先级标签：
+- P0: 极其重要或紧急的输入内容
+- P1: 重要的输入内容
+- P2: 常规的输入内容
+- P3: 次要的输入内容
+
+注意：这个优先级是对输入内容的判定，用于指导生成器如何处理这个输入。
+..."""
+```
+
+#### ✅ 评估器优先级详解 (Evaluator Priority: P0-P3)
+
+评估器在评估生成内容时，会根据**输出内容的质量**重新判定优先级。这个优先级保存在 CSV 的 `eval_priority` 列中（**会覆盖生成器的优先级**）。
+
+**工作原理**：评估器会分析生成内容的质量，根据加权总分和各维度评分，在 JSON 中返回 `determined_priority` 字段。
+
+**优先级详细说明**：
+
+| 优先级 | 含义 | 质量特征 | 典型评分范围<br/>(0-100分制) | 对应决策 | 在 CSV 中的位置 |
+|--------|------|----------|:------------------------:|----------|--------------|
+| **P0** | 最高质量<br/>⭐⭐⭐⭐⭐ | • 加权总分高<br/>• 各维度评分优秀<br/>• 可直接发布<br/>• 无需人工复核 | **≥ 90 分** | 通常为 `PUBLISH` | `eval_priority` 列<br/>（覆盖生成器优先级） |
+| **P1** | 高质量<br/>⭐⭐⭐⭐ | • 加权总分较高<br/>• 质量良好<br/>• 建议发布<br/>• 可能需要简单复核 | **80-89 分** | 通常为 `PUBLISH` 或 `REVIEW` | `eval_priority` 列<br/>（覆盖生成器优先级） |
+| **P2** | 中等质量<br/>⭐⭐⭐ | • 加权总分中等<br/>• 部分维度可能不足<br/>• 需要复核<br/>• 可能需要修改 | **70-79 分** | 通常为 `REVIEW` | `eval_priority` 列<br/>（覆盖生成器优先级） |
+| **P3** | 低质量<br/>⭐⭐ | • 加权总分较低<br/>• 存在明显问题<br/>• 不建议发布<br/>• 需要大幅修改或重做 | **< 70 分** | 通常为 `REVIEW` 或 `REJECT` | `eval_priority` 列<br/>（覆盖生成器优先级） |
+
+**重要提示**：
+- ⚠️ 评估器**不包含 P4**，如果无法判定默认为 P3
+- ⚠️ 评估器的优先级会**覆盖**生成器的优先级（因为评估器优先级反映的是实际输出质量）
+- ✅ 评估器优先级基于客观的评分标准，比生成器优先级更可靠
+
+**如何查看**：在 `batch_evaluator.py` 的输出 CSV 中，查看 `eval_priority` 列（这是评估器重新判定的优先级）。
+
+**自定义判定标准**：在 `config.py` 的 `EVALUATION_PROMPT` 中定义评估器如何判定 P0-P3。例如：
+```python
+EVALUATION_PROMPT = """...
+根据加权总分判定优先级：
+- P0: weighted_total_score ≥ 90（最高质量）
+- P1: 80 ≤ weighted_total_score < 90（高质量）
+- P2: 70 ≤ weighted_total_score < 80（中等质量）
+- P3: weighted_total_score < 70（低质量）
+..."""
+```
+
+#### 🔗 优先级与决策的关系
+
+**优先级（Priority）** 和 **决策（Decision）** 是两个独立的维度，但通常有对应关系：
+
+**核心概念**：
+- **优先级（P0-P3）**：由 LLM 根据业务逻辑或质量评分判定，反映内容的重要性或质量等级
+- **决策（PUBLISH/REVIEW/REJECT）**：由代码根据客观评分阈值自动判定，提供明确的发布建议
+
+**对应关系表**：
+
+| 评估器优先级 | 典型决策 | 判定条件（代码自动判定） | 说明 | 建议操作 |
+|------------|---------|:---------------------:|------|:--------|
+| **P0**<br/>⭐⭐⭐⭐⭐ | `PUBLISH` | • `weighted_total_score ≥ 75`<br/>• `factuality_score ≥ 5` | 最高质量，可直接发布 | ✅ 直接发布，无需复核 |
+| **P1**<br/>⭐⭐⭐⭐ | `PUBLISH` 或 `REVIEW` | • `weighted_total_score ≥ 75`<br/>• `factuality_score ≥ 5` | 高质量，通常可发布 | ✅ 通常可发布，简单复核即可 |
+| **P2**<br/>⭐⭐⭐ | `REVIEW` | • `60 ≤ weighted_total_score < 75`<br/>• `factuality_score ≥ 5` | 中等质量，需要人工复核 | ⚠️ 需要人工复核，可能需要修改 |
+| **P3**<br/>⭐⭐ | `REVIEW` 或 `REJECT` | • `weighted_total_score < 60`<br/>• 或 `factuality_score < 5` | 低质量，不建议发布 | ❌ 不建议发布，需要大幅修改或重做 |
+| **P4**<br/>（仅生成器） | `ERROR` | 生成器无法提取优先级 | 处理出错或无法判定 | 🔧 检查错误，重新处理 |
+
+**决策判定逻辑**（由代码自动判定，基于客观评分阈值）：
+
+1. **REJECT（拒绝）**：
+   - 条件：`factuality_score < 5`（存在幻觉或事实错误）
+   - 说明：无论其他分数如何，只要事实性分数低于 5 分，直接拒绝
+   - 优先级：通常对应 P3
+
+2. **PUBLISH（发布）**：
+   - 条件：`weighted_total_score >= 75` 且 `factuality_score >= 5`
+   - 说明：质量达到发布标准，可直接发布
+   - 优先级：通常对应 P0 或 P1
+
+3. **REVIEW（复核）**：
+   - 条件：其他所有情况
+   - 说明：需要人工复核，可能需要修改
+   - 优先级：通常对应 P2 或 P3
+
+**重要提示**：
+- ✅ **优先级**：由 LLM 根据业务逻辑或质量评分判定，可以在 `SYSTEM_PROMPT` 和 `EVALUATION_PROMPT` 中自定义判定标准
+- ✅ **决策**：由代码根据评分自动判定，基于客观的评分阈值（不可自定义，除非修改代码）
+- 📊 **优先级的作用**：帮助你快速筛选需要重点关注的内容（如 P0 内容需要优先处理）
+- 🎯 **决策的作用**：提供明确的发布建议（PUBLISH/REVIEW/REJECT），基于客观标准
+- ⚠️ **两者可能不一致**：优先级是主观判定，决策是客观判定，两者可能不完全对应
+
+#### 💡 如何使用优先级
+
+**1. 筛选高质量内容**：
+```python
+# 在 Excel 或 Python 中筛选
+import pandas as pd
+df = pd.read_csv('evaluated.csv')
+
+# 筛选最高质量内容（P0）
+df[df['eval_priority'] == 'P0']
+
+# 筛选高质量内容（P0 和 P1）
+df[df['eval_priority'].isin(['P0', 'P1'])]
+
+# 筛选需要复核的内容（P2 和 P3）
+df[df['eval_priority'].isin(['P2', 'P3'])]
+```
+
+**2. 结合决策筛选**：
+```python
+# 筛选可直接发布的高质量内容
+df[(df['eval_priority'] == 'P0') & (df['decision'] == 'PUBLISH')]
+
+# 筛选需要复核的高质量内容
+df[(df['eval_priority'].isin(['P0', 'P1'])) & (df['decision'] == 'REVIEW')]
+
+# 筛选被拒绝的内容
+df[df['decision'] == 'REJECT']
+```
+
+**3. 优先级分布分析**：
+- 📊 查看评估结果统计中的"优先级分布"，了解内容质量分布情况
+- ✅ **P0/P1 占比高**：说明整体质量好，生成策略有效
+- ⚠️ **P3 占比高**：说明需要优化生成策略，检查 Prompt 或模型参数
+- 📈 **P2 占比高**：说明质量中等，可以考虑微调提升到 P1
+
+**4. 实际应用场景**：
+- 🎯 **内容发布流程**：优先处理 P0/P1 且决策为 PUBLISH 的内容
+- 🔍 **质量监控**：定期查看 P3 占比，评估生成质量趋势
+- 📝 **Prompt 优化**：分析 P2/P3 内容的共同问题，针对性优化 Prompt
+- ⚡ **资源分配**：将更多资源投入到 P0 内容的生成和复核
+
+#### 自定义优先级判定标准
+
+你可以在 `config.py` 中自定义优先级判定标准：
+
+- **生成器优先级**：在 `SYSTEM_PROMPT` 中定义生成器如何判定 P0-P4
+- **评估器优先级**：在 `EVALUATION_PROMPT` 中定义评估器如何判定 P0-P3
+
+例如，你可以让评估器根据加权总分判定优先级：
+- P0: weighted_total_score ≥ 90
+- P1: 80 ≤ weighted_total_score < 90
+- P2: 70 ≤ weighted_total_score < 80
+- P3: weighted_total_score < 70
+
 ### Script 1: 批量生成器 (batch_generator.py)
 
 从原始 CSV 文件生成模型响应。
@@ -266,7 +470,9 @@ python batch_generator.py <输入CSV文件> <输出CSV文件>
 **输出 CSV:**
 - 包含原始数据的所有列
 - 新增 `model_response` 列：LLM 的完整响应（包含思考过程）
-- 新增 `eval_priority` 列：提取的优先级（如果输出包含 `<priority>` 标签）
+- 新增 `eval_priority` 列：**生成器判定的优先级**（P0-P4，如果输出包含 `<priority>` 标签）
+  - 这是生成器根据输入内容自动判定的优先级
+  - 如果无法提取，默认为 P4
 - 新增 `final_content` 列：提取的最终内容（如果输出包含 `<content>` 标签）
 
 ### Script 2: 批量评估器 (batch_evaluator.py)
@@ -285,16 +491,23 @@ python batch_evaluator.py <输入CSV文件> <输出CSV文件>
 **输出 CSV:**
 - 包含原始数据的所有列
 - 新增评估列：
-  - `eval_priority`: 评估器判定的优先级
+  - `eval_priority`: **评估器重新判定的优先级**（P0-P3）
+    - 这是评估器根据内容质量重新判定的优先级，与生成器的优先级可能不同
+    - 评估器不包含 P4，如果无法判定默认为 P3
+    - 详见上方"优先级系统说明"章节
   - `factuality_score`: 事实性评分 (0-10)
   - `completeness_score`: 全面性评分 (0-10)
   - `adherence_score`: 指令遵循度评分 (0-10)
   - `attractiveness_score`: 吸引力评分 (0-10)
   - `weighted_total_score`: 加权总分 (0-100)
   - `decision`: 决策 (PUBLISH/REJECT/REVIEW/ERROR)
+    - PUBLISH: 高质量，加权总分 ≥ 75，可直接发布
+    - REVIEW: 中等质量，加权总分 < 75，需要人工复核
+    - REJECT: 低质量，事实性分数 < 5，存在幻觉，直接拒绝
+    - ERROR: 处理出错
   - `reason`: 决策原因
-  - `reasoning`: 评估理由
-  - `pass`: 是否通过
+  - `reasoning`: 评估理由（AI 评估器的详细评价）
+  - `pass`: 是否通过（布尔值）
 
 ### Script 3: 评估员 Prompt 生成器 (generate_evaluator_prompt.py)
 
@@ -312,11 +525,23 @@ python generate_evaluator_prompt.py <应用场景> <北极星指标> [输出文�
 
 **示例:**
 ```bash
-# 生成小红书文案评估 Prompt
+# Linux/Mac - 生成小红书文案评估 Prompt
 python generate_evaluator_prompt.py "小红书文案生成" "幽默感和传播力"
 
-# 生成代码审查评估 Prompt
+# Linux/Mac - 生成代码审查评估 Prompt
 python generate_evaluator_prompt.py "Python代码审查" "代码安全性和可维护性" code_review_prompt.txt
+
+# ⚠️ Windows PowerShell 用户注意：
+# 如果参数包含中文，可能会遇到编码问题。建议使用以下方法：
+# 方法1：使用引号包裹参数（推荐）
+python generate_evaluator_prompt.py "小红书文案生成" "幽默感和传播力"
+
+# 方法2：如果方法1失败，创建一个临时 Python 脚本
+# 创建 run_generate.py 文件：
+# import sys
+# sys.argv = ['generate_evaluator_prompt.py', '小红书文案生成', '幽默感和传播力']
+# exec(open('generate_evaluator_prompt.py').read())
+# 然后运行：python run_generate.py
 ```
 
 **功能特点:**
@@ -442,11 +667,24 @@ Return ONLY JSON:
         "adherence_score": <0-10>,
         "attractiveness_score": <0-10>
     }},
-    "weighted_total_score": <calculated_total>,
+    "weighted_total_score": <calculated_total_0_to_100>,
     "reasoning": "<explanation>",
     "pass": <true/false>
-}}"""
+}}
+
+Note: 
+- Each dimension score is 0-10 points
+- weighted_total_score = (factuality_score * 3) + (completeness_score * 2) + (adherence_score * 2.5) + (attractiveness_score * 2.5)
+- weighted_total_score ranges from 0 to 100 (since weights sum to 10)
+- Decision threshold: weighted_total_score >= 75 for PUBLISH
 ```
+
+**重要说明**：
+- 评估器支持两种 JSON 格式：
+  1. **扁平格式**（推荐）：`{"scores": {"factuality_score": 9, "completeness_score": 9}}`
+  2. **嵌套格式**：`{"scores": {"factuality_safety": {"score": 9, "weight": 0.35}}}`
+- 评分标准：各维度分数为 0-10 分制，加权总分为 0-100 分制
+- 决策逻辑：加权总分 >= 75 分发布，< 75 分人工复核，事实性分数 < 5 分直接拒绝
 
 ## 🔍 结果提取功能
 
@@ -490,6 +728,10 @@ Return ONLY JSON:
 3. **CSV 编码**: 输出文件使用 UTF-8-BOM 编码，确保中文正确显示
 4. **JSON 解析**: 评估器会自动从响应中提取 JSON，支持多种格式（纯 JSON、代码块中的 JSON 等）
 5. **提示词设计**: 确保评估提示词明确要求返回 JSON 格式，并指定 JSON 结构
+6. **Windows 环境兼容性**:
+   - 创建 `.env` 文件时，请使用 PowerShell 的 `[System.IO.File]::WriteAllText()` 方法，或使用文本编辑器（如 VS Code）创建，确保使用 UTF-8 编码
+   - 如果命令行参数包含中文，建议使用引号包裹，或创建临时 Python 脚本传递参数
+   - CSV 文件会自动尝试多种编码格式读取，通常不会有问题
 
 ## 🔧 故障排除
 

@@ -94,7 +94,14 @@ def validate_csv_columns(df: pd.DataFrame, required_columns: list) -> None:
     """验证 CSV 是否包含必需的列"""
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
-        raise ValueError(f"CSV 文件缺少必需的列: {', '.join(missing_columns)}")
+        raise ValueError(f"CSV 文件缺少必需的列: {', '.join(missing_columns)}\n"
+                        f"当前 CSV 文件的列: {', '.join(df.columns.tolist())}\n"
+                        f"请确保 CSV 文件的第一列是 '{required_columns[0]}'")
+    
+    # 检查是否有空行
+    empty_rows = df[df[required_columns[0]].isna() | (df[required_columns[0]].astype(str).str.strip() == "")]
+    if len(empty_rows) > 0:
+        print(f"警告: 发现 {len(empty_rows)} 行空数据，这些行将被跳过")
 
 
 def batch_generate(input_csv: str, output_csv: str) -> None:

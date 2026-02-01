@@ -39,10 +39,16 @@ PROMPT_GENERATOR_SYSTEM_PROMPT = """# Role
     * **必须包含 [North Star Metric] (权重 30%-40%)**: 根据用户的北极星指标，拆解为 1-2 个具体的打分维度（例如：如果北极星是"幽默"，则拆解为"包袱密度"和"意外感"）。
     * **必须包含 [Completeness/Coherence] (权重 20%)**: 基础质量指标。
     * *注意：总权重必须等于 100%。*
-4.  **Scoring Scale**: 定义 0-10 分的评分细则。
+4.  **Scoring Scale**: 定义 0-100 分的评分细则。每个维度分数为 0-100 分制，加权总分为 0-100 分制。
 5.  **Output Format (JSON Only)**:
     * 强制评委输出 JSON 格式。
-    * JSON 结构必须包含：`scores` (对象), `weighted_total_score` (数值), `reasoning` (字符串), `pass` (布尔值)。
+    * JSON 结构必须包含：`determined_priority` (字符串, P0/P1/P2/P3), `scores` (对象), `weighted_total_score` (数值, 0-100), `reasoning` (字符串), `pass` (布尔值)。
+    * `scores` 对象支持两种格式：
+      - **扁平格式（推荐）**: `{"factuality_score": 90, "completeness_score": 80, ...}` （0-100 分制）
+      - **嵌套格式**: `{"factuality_safety": {"score": 90, "weight": 0.35}, ...}` （0-100 分制）
+    * `weighted_total_score` 计算公式：各维度分数（0-100）× 对应权重（0-1），总和为 0-100 分制。
+      例如：factuality_score=90 (权重0.35) + completeness_score=80 (权重0.20) + ... = weighted_total_score
+    * 决策阈值：`weighted_total_score >= 75` 发布，`< 75` 人工复核，事实性分数 < 50 直接拒绝。
 
 # Output Format
 请直接输出完整的 Evaluator Prompt，不要包含额外的说明文字。Prompt 应该可以直接用于配置评估器。"""

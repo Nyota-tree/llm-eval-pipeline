@@ -27,6 +27,9 @@ load_dotenv()
 def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
     """
     从评估 JSON 中提取并计算评分
+    支持两种 JSON 格式：
+    1. 扁平格式: {"scores": {"factuality_score": 9, "completeness_score": 9}}
+    2. 嵌套格式: {"scores": {"factuality_safety": {"score": 9, "weight": 0.35}}}
     
     Args:
         response_json: 模型返回的 JSON 对象
@@ -37,26 +40,139 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
     priority = response_json.get("determined_priority", "P3")
     scores = response_json.get("scores", {})
     
-    # 获取各项分数
-    factuality_score = scores.get('factuality_score', 0)
-    completeness_score = scores.get('completeness_score', 0)
-    adherence_score = scores.get('adherence_score', 0)
-    attractiveness_score = scores.get('attractiveness_score', 0)
+    # 检测 JSON 格式：扁平格式还是嵌套格式
+    is_nested_format = False
+    if scores:
+        # 检查第一个值是否是字典（嵌套格式）
+        first_value = next(iter(scores.values()), None)
+        if isinstance(first_value, dict) and ("score" in first_value or "weight" in first_value):
+            is_nested_format = True
     
-    # 计算加权总分 (代码二次校验，防止模型算错)
-    weighted_score = (
-        factuality_score * 3 +
-        completeness_score * 2 +
-        adherence_score * 2.5 +
-        attractiveness_score * 2.5
-    )
+    # 根据格式提取分数
+    if is_nested_format:
+        # 嵌套格式：从嵌套对象中提取 score
+        factuality_score = 0
+        completeness_score = 0
+        adherence_score = 0
+        attractiveness_score = 0
+        
+        # 尝试从嵌套结构中提取分数
+        # 支持常见的键名变体
+        for key, value in scores.items():
+            if isinstance(value, dict):
+                score_value = value.get("score", 0)
+                key_lower = key.lower()
+                
+                # 匹配各种可能的键名
+                if "factuality" in key_lower or "safety" in key_lower:
+                    factuality_score = score_value
+                elif "completeness" in key_lower or "coverage" in key_lower:
+                    completeness_score = score_value
+                elif "adherence" in key_lower or "instruction" in key_lower or "compliance" in key_lower:
+                    adherence_score = score_value
+                elif "attractiveness" in key_lower or "quality" in key_lower or "appeal" in key_lower:
+                    attractiveness_score = score_value
+    else:
+        # 扁平格式：直接获取分数
+        factuality_score = scores.get('factuality_score', 0)
+        completeness_score = scores.get('completeness_score', 0)
+        adherence_score = scores.get('adherence_score', 0)
+        attractiveness_score = scores.get('attractiveness_score', 0)
+        
+        # 如果直接键不存在，尝试其他可能的键名
+        if factuality_score == 0:
+            factuality_score = scores.get('factuality', scores.get('safety_score', 0))
+        if completeness_score == 0:
+            completeness_score = scores.get('completeness', scores.get('coverage_score', 0))
+        if adherence_score == 0:
+            adherence_score = scores.get('adherence', scores.get('instruction_score', 0))
+        if attractiveness_score == 0:
+            attractiveness_score = scores.get('attractiveness', scores.get('quality_score', 0))
+    
+    # 确保分数是数值类型
+    try:
+        factuality_score = float(factuality_score) if factuality_score else 0
+        completeness_score = float(completeness_score) if completeness_score else 0
+        adherence_score = float(adherence_score) if adherence_score else 0
+        attractiveness_score = float(attractiveness_score) if attractiveness_score else 0
+    except (ValueError, TypeError):
+        factuality_score = completeness_score = adherence_score = attractiveness_score = 0
+    
+    # 自动检测分数制式：如果所有分数都 <= 10，认为是 0-10 分制；否则认为是 0-100 分制
+    max_score = max(factuality_score, completeness_score, adherence_score, attractiveness_score)
+    is_0_10_scale = max_score <= 10 and max_score > 0
+    
+    # 如果模型已经提供了 weighted_total_score，优先使用（但需要验证范围）
+    model_weighted_score = response_json.get("weighted_total_score")
+    if model_weighted_score is not None:
+        try:
+            model_weighted_score = float(model_weighted_score)
+            # 如果模型返回的是 0-10 分制，转换为 0-100 分制
+            if 0 <= model_weighted_score <= 10:
+                model_weighted_score = model_weighted_score * 10
+            # 如果已经是 0-100 分制，直接使用
+            if 0 <= model_weighted_score <= 100:
+                weighted_score = model_weighted_score
+            else:
+                # 如果超出范围，重新计算
+                if is_0_10_scale:
+                    # 0-10 分制：使用原权重（3, 2, 2.5, 2.5）
+                    weighted_score = (
+                        factuality_score * 3 +
+                        completeness_score * 2 +
+                        adherence_score * 2.5 +
+                        attractiveness_score * 2.5
+                    )
+                else:
+                    # 0-100 分制：使用新权重（0.3, 0.2, 0.25, 0.25）
+                    weighted_score = (
+                        factuality_score * 0.3 +
+                        completeness_score * 0.2 +
+                        adherence_score * 0.25 +
+                        attractiveness_score * 0.25
+                    )
+        except (ValueError, TypeError):
+            # 如果解析失败，重新计算
+            if is_0_10_scale:
+                weighted_score = (
+                    factuality_score * 3 +
+                    completeness_score * 2 +
+                    adherence_score * 2.5 +
+                    attractiveness_score * 2.5
+                )
+            else:
+                weighted_score = (
+                    factuality_score * 0.3 +
+                    completeness_score * 0.2 +
+                    adherence_score * 0.25 +
+                    attractiveness_score * 0.25
+                )
+    else:
+        # 计算加权总分 (代码二次校验，防止模型算错)
+        if is_0_10_scale:
+            # 0-10 分制：使用原权重（3, 2, 2.5, 2.5）
+            weighted_score = (
+                factuality_score * 3 +
+                completeness_score * 2 +
+                adherence_score * 2.5 +
+                attractiveness_score * 2.5
+            )
+        else:
+            # 0-100 分制：使用新权重（0.3, 0.2, 0.25, 0.25）
+            weighted_score = (
+                factuality_score * 0.3 +
+                completeness_score * 0.2 +
+                adherence_score * 0.25 +
+                attractiveness_score * 0.25
+            )
     
     # 逻辑判定
-    # 1. 幻觉熔断
-    if factuality_score < 5:
+    # 1. 幻觉熔断（根据分数制式调整阈值）
+    factuality_threshold = 5 if is_0_10_scale else 50
+    if factuality_score < factuality_threshold:
         decision = "REJECT"  # 直接丢弃
         reason = "Hallucination Detected"
-    # 2. 质量门槛 (75 分才发布)
+    # 2. 质量门槛 (75 分才发布，0-100 分制)
     elif weighted_score >= 75:
         decision = "PUBLISH"
         reason = "High Quality Score"
@@ -180,7 +296,15 @@ def validate_csv_columns(df: pd.DataFrame, required_columns: list) -> None:
     """验证 CSV 是否包含必需的列"""
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
-        raise ValueError(f"CSV 文件缺少必需的列: {', '.join(missing_columns)}")
+        raise ValueError(f"CSV 文件缺少必需的列: {', '.join(missing_columns)}\n"
+                        f"当前 CSV 文件的列: {', '.join(df.columns.tolist())}\n"
+                        f"请确保 CSV 文件包含以下列: {', '.join(required_columns)}")
+    
+    # 检查是否有空行
+    for col in required_columns:
+        empty_rows = df[df[col].isna() | (df[col].astype(str).str.strip() == "")]
+        if len(empty_rows) > 0:
+            print(f"警告: 列 '{col}' 中有 {len(empty_rows)} 行空数据，这些行将被跳过")
 
 
 def batch_evaluate(input_csv: str, output_csv: str) -> None:
@@ -315,22 +439,59 @@ def batch_evaluate(input_csv: str, output_csv: str) -> None:
         for idx, error_msg in errors.items():
             print(f"  行 {idx}: {error_msg}")
     
-    # 显示统计信息
+    # 显示详细统计信息
+    print("\n" + "=" * 60)
+    print("评估结果统计")
+    print("=" * 60)
+    
     if "decision" in df.columns:
         decision_counts = df["decision"].value_counts()
-        print(f"\n决策分布:")
+        print(f"\n📊 决策分布:")
         for decision, count in decision_counts.items():
-            print(f"  {decision}: {count} 条")
+            percentage = (count / total_rows) * 100
+            print(f"  {decision:12s}: {count:4d} 条 ({percentage:5.1f}%)")
     
     if "weighted_total_score" in df.columns:
         valid_scores = df[df["weighted_total_score"].notna()]["weighted_total_score"]
         if len(valid_scores) > 0:
-            print(f"\n评分统计:")
+            print(f"\n📈 加权总分统计 (0-100 分制):")
             print(f"  平均分: {valid_scores.mean():.2f}")
             print(f"  最高分: {valid_scores.max():.2f}")
             print(f"  最低分: {valid_scores.min():.2f}")
+            print(f"  中位数: {valid_scores.median():.2f}")
+            
+            # 分数分布
+            high_quality = len(valid_scores[valid_scores >= 75])
+            medium_quality = len(valid_scores[(valid_scores >= 60) & (valid_scores < 75)])
+            low_quality = len(valid_scores[valid_scores < 60])
+            print(f"\n  分数分布:")
+            print(f"    高质量 (≥75分): {high_quality:4d} 条 ({high_quality/len(valid_scores)*100:5.1f}%)")
+            print(f"    中等质量 (60-74分): {medium_quality:4d} 条 ({medium_quality/len(valid_scores)*100:5.1f}%)")
+            print(f"    低质量 (<60分): {low_quality:4d} 条 ({low_quality/len(valid_scores)*100:5.1f}%)")
     
-    print(f"\n创建的评估列: {', '.join(eval_columns)}")
+    # 各维度评分统计
+    score_columns = ["factuality_score", "completeness_score", "adherence_score", "attractiveness_score"]
+    available_score_columns = [col for col in score_columns if col in df.columns]
+    if available_score_columns:
+        print(f"\n📋 各维度评分统计 (0-10 分制):")
+        for col in available_score_columns:
+            valid_scores = df[df[col].notna()][col]
+            if len(valid_scores) > 0:
+                col_name = col.replace("_score", "").replace("_", " ").title()
+                print(f"  {col_name:20s}: 平均 {valid_scores.mean():.2f}, 最高 {valid_scores.max():.2f}, 最低 {valid_scores.min():.2f}")
+    
+    # 优先级分布
+    if "eval_priority" in df.columns:
+        priority_counts = df["eval_priority"].value_counts()
+        if len(priority_counts) > 0:
+            print(f"\n🏷️  优先级分布:")
+            for priority, count in priority_counts.items():
+                if pd.notna(priority):
+                    percentage = (count / total_rows) * 100
+                    print(f"  {priority:12s}: {count:4d} 条 ({percentage:5.1f}%)")
+    
+    print(f"\n✅ 创建的评估列: {', '.join(eval_columns)}")
+    print("=" * 60)
 
 
 def main():

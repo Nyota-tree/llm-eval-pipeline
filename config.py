@@ -136,8 +136,12 @@ Return ONLY a JSON object (no Markdown code blocks):
   "pass": <true/false>
 }}
 
-Note: weighted_total_score = (factuality * 3) + (completeness * 2) + (adherence * 2.5) + (attractiveness * 2.5)
-If factuality_score < 5, pass must be false.
+Note: 
+- Each dimension score is 0-10 points
+- weighted_total_score = (factuality_score * 3) + (completeness_score * 2) + (adherence_score * 2.5) + (attractiveness_score * 2.5)
+- weighted_total_score ranges from 0 to 100 (since weights sum to 10)
+- If factuality_score < 5, pass must be false
+- Decision threshold: weighted_total_score >= 75 for PUBLISH
 
 You can customize this evaluation prompt in config.py to match your specific evaluation criteria."""
 
