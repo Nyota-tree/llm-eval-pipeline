@@ -23,17 +23,17 @@
 
 ```mermaid
 graph TD
-    Start[开始: input.csv] -->|1. 批量生成| Gen[Generator: 批量生成回复]
-    Gen -->|并发请求| API[LLM API (DeepSeek/OpenAI/Claude)]
-    API -->|返回结果| IntCSV[中间结果.csv]
+    Start["开始: input.csv"] -->|"1. 批量生成"| Gen["Generator: 批量生成回复"]
+    Gen -->|"并发请求"| API["LLM API (DeepSeek/OpenAI/Claude)"]
+    API -->|"返回结果"| IntCSV["中间结果.csv"]
     
-    IntCSV -->|2. 自动评估| Eval[Evaluator: 裁判打分]
-    Eval -->|加载 Prompt| Prompt[自动生成评估标准<br>基于北极星指标]
+    IntCSV -->|"2. 自动评估"| Eval["Evaluator: 裁判打分"]
+    Eval -->|"加载 Prompt"| Prompt["自动生成评估标准<br/>基于北极星指标"]
     
-    Eval -->|3. 结构化提取| Final[最终产出.csv]
-    Final -->|包含| Scores[多维度评分]
-    Final -->|包含| Decision[P0-P4 优先级]
-    Final -->|包含| Reason[AI 评价理由]
+    Eval -->|"3. 结构化提取"| Final["最终产出.csv"]
+    Final -->|"包含"| Scores["多维度评分"]
+    Final -->|"包含"| Decision["P0-P4 优先级"]
+    Final -->|"包含"| Reason["AI 评价理由"]
 ```
 
 ## ✨ 核心功能
