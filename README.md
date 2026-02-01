@@ -126,6 +126,16 @@ graph TD
 帮我运行 generate_evaluator_prompt.py，场景是"小红书文案生成"，指标是"幽默感和传播力"
 ```
 
+脚本会：
+1. 调用 LLM 生成专业的评估员 Prompt
+2. 保存到文件（默认: `generated_evaluator_prompt.txt`）
+3. **询问是否自动更新到 `config.py`**：输入 `y` 确认，生成的 Prompt 会自动替换 `config.py` 中的 `EVALUATION_PROMPT`
+
+**重要提示**：
+- 生成的 Prompt 会保存到文件，你可以先查看再决定是否更新到 `config.py`
+- 如果选择更新，脚本会自动替换 `config.py` 中的 `EVALUATION_PROMPT` 变量
+- 生成器的 `SYSTEM_PROMPT` 需要手动编辑 `config.py` 来配置（或让 Cursor 帮你修改）
+
 **Step 5: 准备输入数据**
 
 - 如果使用示例文件：直接告诉 Cursor 使用 `examples/input_example.csv`
@@ -314,11 +324,32 @@ python generate_evaluator_prompt.py "Python代码审查" "代码安全性和可�
 - 包含完整的评分标准（Factuality/Safety、North Star Metric、Completeness）
 - 自动计算权重分配（总和为 100%）
 - 生成标准的 JSON 输出格式
-- 可选择自动更新到 `config.py`
+- **可选择自动更新到 `config.py`**：运行后会询问是否更新，输入 `y` 即可自动替换 `EVALUATION_PROMPT`
+
+**生成的 Prompt 如何使用:**
+1. **方式 1（推荐）**：运行脚本时选择 `y`，自动更新到 `config.py` 的 `EVALUATION_PROMPT`
+2. **方式 2**：手动复制生成的 Prompt，粘贴到 `config.py` 的 `EVALUATION_PROMPT = """..."""` 中
+3. **方式 3**：直接使用生成的 `.txt` 文件作为参考，手动编辑 `config.py`
 
 ## ⚙️ 配置说明
 
 所有配置都在 `config.py` 文件中，包括：
+
+### Prompt 配置说明
+
+**生成器 Prompt (`SYSTEM_PROMPT`)**：
+- **位置**：`config.py` 中的 `SYSTEM_PROMPT` 变量
+- **用途**：控制生成器如何生成内容和判定优先级
+- **配置方式**：**手动编辑 `config.py`**，或让 Cursor 帮你修改
+- **输出格式要求**：如果使用优先级功能，必须包含 `<priority>P{x}</priority>` 和 `<content>...</content>` 标签
+
+**评估器 Prompt (`EVALUATION_PROMPT`)**：
+- **位置**：`config.py` 中的 `EVALUATION_PROMPT` 变量
+- **用途**：控制评估器如何评估生成的内容和重新判定优先级
+- **配置方式**：
+  1. **自动生成（推荐）**：使用 `generate_evaluator_prompt.py` 生成，运行后选择 `y` 自动更新到 `config.py`
+  2. **手动编辑**：直接编辑 `config.py` 中的 `EVALUATION_PROMPT`
+- **输出格式要求**：必须返回 JSON 格式，包含 `determined_priority`、`scores`、`weighted_total_score`、`reasoning`、`pass` 等字段
 
 ### API 配置
 
