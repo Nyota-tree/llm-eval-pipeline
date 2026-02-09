@@ -552,9 +552,8 @@ def render_phase_evaluating():
     status = st.status("评测进行中…", expanded=True)
 
     eval_columns = [
-        "eval_priority", "factuality_score", "completeness_score",
-        "adherence_score", "attractiveness_score", "weighted_total_score",
-        "decision", "reason", "reasoning", "pass",
+        "eval_priority", "factuality_score", "north_star_score", "completeness_score",
+        "weighted_total_score", "decision", "reason", "reasoning", "pass",
     ]
     for col in eval_columns:
         if col not in df.columns:
@@ -574,9 +573,8 @@ def render_phase_evaluating():
             else:
                 df.at[idx, "eval_priority"] = result.get("priority")
                 df.at[idx, "factuality_score"] = result.get("factuality_score")
+                df.at[idx, "north_star_score"] = result.get("north_star_score")
                 df.at[idx, "completeness_score"] = result.get("completeness_score")
-                df.at[idx, "adherence_score"] = result.get("adherence_score")
-                df.at[idx, "attractiveness_score"] = result.get("attractiveness_score")
                 df.at[idx, "weighted_total_score"] = result.get("weighted_total_score")
                 df.at[idx, "decision"] = result.get("decision")
                 df.at[idx, "reason"] = result.get("reason")
@@ -657,12 +655,18 @@ def render_phase_result():
         st.text_area("评估 Prompt", value=eval_prompt, height=280, disabled=True, label_visibility="collapsed")
     st.divider()
 
-    # 各维度小分一览（优先展示，避免小分被忽略）
-    score_cols = ["factuality_score", "completeness_score", "adherence_score", "attractiveness_score", "weighted_total_score"]
-    existing_score_cols = [c for c in score_cols if c in df.columns]
+    # 各维度小分一览（仅展示常用维度，不展示始终为 0 的遵循度/吸引力）
+    score_col_order = ["factuality_score", "north_star_score", "completeness_score", "weighted_total_score"]
+    score_label_map = {
+        "factuality_score": "事实性/安全性",
+        "north_star_score": "北极星指标",
+        "completeness_score": "完整性与连贯性",
+        "weighted_total_score": "加权总分",
+    }
+    existing_score_cols = [c for c in score_col_order if c in df.columns]
     if existing_score_cols:
         st.caption("各维度小分")
-        labels = ["事实性/安全性", "完整性", "遵循度", "吸引力", "加权总分"][: len(existing_score_cols)]
+        labels = [score_label_map[c] for c in existing_score_cols]
         score_df = df[existing_score_cols].copy()
         score_df.columns = labels
         st.dataframe(score_df, use_container_width=True, hide_index=True, column_config={lb: st.column_config.NumberColumn(lb, format="%.1f") for lb in labels})
@@ -672,16 +676,15 @@ def render_phase_result():
     st.caption("说明：REJECT 表示「事实性/安全性」分数低于阈值（0–10 分制低于 5 分，或 0–100 分制低于 50 分），与总分无关。")
     display_cols = [
         "question", GENERATED_ANSWER_COLUMN, OPTIONAL_ANSWER_COLUMN,
-        "factuality_score", "completeness_score", "adherence_score", "attractiveness_score",
+        "factuality_score", "north_star_score", "completeness_score",
         "weighted_total_score", "decision", "reason", "reasoning",
     ]
     display_cols = [c for c in display_cols if c in df.columns]
     col_config = {}
     for col, label in [
-        ("factuality_score", "事实性"),
-        ("completeness_score", "完整性"),
-        ("adherence_score", "遵循度"),
-        ("attractiveness_score", "吸引力"),
+        ("factuality_score", "事实性/安全性"),
+        ("north_star_score", "北极星指标"),
+        ("completeness_score", "完整性与连贯性"),
         ("weighted_total_score", "加权总分"),
     ]:
         if col in display_cols:

@@ -39,6 +39,7 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
     """
     priority = response_json.get("determined_priority", "P3")
     scores = response_json.get("scores", {})
+    north_star_score_val = 0  # 北极星指标（与 Prompt 中 north_star_score 对应）
     
     # 检测 JSON 格式：扁平格式还是嵌套格式
     is_nested_format = False
@@ -82,9 +83,9 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
         # 兼容常见自定义键名（如 factuality_safety_score / north_star_score / completeness_coherence_score）
         factuality_score = scores.get('factuality_safety_score', factuality_score)
         completeness_score = scores.get('completeness_coherence_score', completeness_score)
-        north_star = scores.get('north_star_score', 0)
-        if attractiveness_score == 0 and north_star:
-            attractiveness_score = north_star  # 北极星指标分展示在「吸引力」列
+        north_star_score_val = scores.get('north_star_score', 0)  # 北极星指标，单独一列展示
+        if attractiveness_score == 0 and north_star_score_val:
+            attractiveness_score = north_star_score_val  # 兼容旧展示逻辑
         
         # 如果直接键不存在，尝试其他可能的键名
         if factuality_score == 0:
@@ -118,6 +119,8 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
                 elif "attractiveness" in key_lower or "quality" in key_lower or "appeal" in key_lower or "吸引" in key_lower or "质量" in key_lower or "north_star" in key_lower or "北极星" in key_lower:
                     if attractiveness_score == 0:
                         attractiveness_score = v
+                    if north_star_score_val == 0 and ("north_star" in key_lower or "北极星" in key_lower):
+                        north_star_score_val = v
     
     # 若 scores 内仍未取到有效小分，尝试从 JSON 顶层读取
     if factuality_score == 0 and completeness_score == 0 and adherence_score == 0 and attractiveness_score == 0:
@@ -125,6 +128,8 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
         completeness_score = response_json.get('completeness_score', response_json.get('completeness_coherence_score', response_json.get('completeness', 0)))
         adherence_score = response_json.get('adherence_score', response_json.get('adherence', 0))
         attractiveness_score = response_json.get('attractiveness_score', response_json.get('north_star_score', response_json.get('attractiveness', 0)))
+    if north_star_score_val == 0:
+        north_star_score_val = response_json.get('north_star_score', 0) or scores.get('north_star_score', 0)
     
     # 确保分数是数值类型
     try:
@@ -132,8 +137,10 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
         completeness_score = float(completeness_score) if completeness_score else 0
         adherence_score = float(adherence_score) if adherence_score else 0
         attractiveness_score = float(attractiveness_score) if attractiveness_score else 0
+        north_star_score_val = float(north_star_score_val) if north_star_score_val else 0
     except (ValueError, TypeError):
         factuality_score = completeness_score = adherence_score = attractiveness_score = 0
+        north_star_score_val = 0
     
     # 自动检测分数制式：如果所有分数都 <= 10，认为是 0-10 分制；否则认为是 0-100 分制
     max_score = max(factuality_score, completeness_score, adherence_score, attractiveness_score)
@@ -223,6 +230,7 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
         "completeness_score": completeness_score,
         "adherence_score": adherence_score,
         "attractiveness_score": attractiveness_score,
+        "north_star_score": north_star_score_val,
         "weighted_total_score": weighted_score,
         "decision": decision,
         "reason": reason,
@@ -430,11 +438,10 @@ def batch_evaluate(input_csv: str, output_csv: str) -> None:
                 finally:
                     pbar.update(1)
     
-    # 初始化评估结果列
+    # 初始化评估结果列（仅写入与常见评估 Prompt 对应的维度，不写入遵循度/吸引力）
     eval_columns = [
-        "eval_priority", "factuality_score", "completeness_score", 
-        "adherence_score", "attractiveness_score", "weighted_total_score",
-        "decision", "reason", "reasoning", "pass"
+        "eval_priority", "factuality_score", "north_star_score", "completeness_score",
+        "weighted_total_score", "decision", "reason", "reasoning", "pass"
     ]
     for col in eval_columns:
         if col not in df.columns:
@@ -446,9 +453,8 @@ def batch_evaluate(input_csv: str, output_csv: str) -> None:
             # 保存评估结果
             df.at[idx, "eval_priority"] = evaluation_result.get("priority")
             df.at[idx, "factuality_score"] = evaluation_result.get("factuality_score")
+            df.at[idx, "north_star_score"] = evaluation_result.get("north_star_score")
             df.at[idx, "completeness_score"] = evaluation_result.get("completeness_score")
-            df.at[idx, "adherence_score"] = evaluation_result.get("adherence_score")
-            df.at[idx, "attractiveness_score"] = evaluation_result.get("attractiveness_score")
             df.at[idx, "weighted_total_score"] = evaluation_result.get("weighted_total_score")
             df.at[idx, "decision"] = evaluation_result.get("decision")
             df.at[idx, "reason"] = evaluation_result.get("reason")
@@ -507,7 +513,7 @@ def batch_evaluate(input_csv: str, output_csv: str) -> None:
             print(f"    低质量 (<60分): {low_quality:4d} 条 ({low_quality/len(valid_scores)*100:5.1f}%)")
     
     # 各维度评分统计
-    score_columns = ["factuality_score", "completeness_score", "adherence_score", "attractiveness_score"]
+    score_columns = ["factuality_score", "north_star_score", "completeness_score"]
     available_score_columns = [col for col in score_columns if col in df.columns]
     if available_score_columns:
         print(f"\n📋 各维度评分统计 (0-10 分制):")
