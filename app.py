@@ -38,6 +38,31 @@ def generate_evaluator_prompt_in_app(scenario: str, north_star_metric: str, api_
         else:
             os.environ.pop("DEEPSEEK_API_KEY", None)
 
+
+def generate_generation_prompt_in_app(scenario: str, north_star: str, api_key: str) -> str:
+    """根据业务场景与北极星指标，调用大模型生成高质量的「生成 Prompt」。"""
+    user_prompt = f"""业务场景：
+{scenario}
+
+北极星指标：
+{north_star}
+
+请根据以上信息生成一份可直接用于生产环境的业务提示词（仅输出提示词正文，无需额外说明）。"""
+    prev = os.environ.get("DEEPSEEK_API_KEY")
+    try:
+        os.environ["DEEPSEEK_API_KEY"] = api_key
+        llm_client = LLMClient(provider="deepseek", model=st.session_state.get("model", DEFAULT_MODEL))
+        return llm_client.generate(
+            system_prompt=GENERATION_PROMPT_GENERATOR_SYSTEM,
+            user_prompt=user_prompt,
+        )
+    finally:
+        if prev is not None:
+            os.environ["DEEPSEEK_API_KEY"] = prev
+        else:
+            os.environ.pop("DEEPSEEK_API_KEY", None)
+
+
 # ==================== 页面配置 ====================
 st.set_page_config(
     page_title="LLM 评测流水线",
@@ -53,9 +78,34 @@ GENERATED_ANSWER_COLUMN = "generated_answer"
 DEFAULT_MODEL = "deepseek-chat"
 MODEL_OPTIONS = ["deepseek-chat", "deepseek-reasoner"]
 PHASES = ["CONFIG", "GENERATION_PROMPT_EDIT", "GENERATING", "PROMPT_EDIT", "EVALUATING", "RESULT"]
-GENERATOR_SYSTEM_TEMPLATE = """你是「{scenario}」场景下的专业助手。请严格围绕以下北极星指标来回答：{north_star}。
 
-要求：直接给出专业、完整的回答，不要额外元说明或重复题目。"""
+# 调用大模型生成「生成 Prompt」时使用的系统提示词
+GENERATION_PROMPT_GENERATOR_SYSTEM = """# Role
+你是一位世界级的提示词工程师，擅长将业务需求转化为极具执行力的 LLM 生产环境提示词。你深谙提示词工程的最佳实践，能够针对特定业务指标进行精细化调优。
+
+# Task
+根据用户提供的【业务场景】和【北极星指标】，为用户撰写一个高质量的、可直接投入生产使用的"业务提示词"。
+
+# Input
+1. 业务场景：描述该 AI 产品的具体用途和用户画像。
+2. 北极星指标：衡量该 AI 表现好坏的核心业务标准。
+
+# Output Framework (你生成的业务提示词必须包含)
+1. **角色设定 (Role)**：定义一个符合场景的、专业的、具有特定人格特质的 AI 角色。
+2. **任务描述 (Task)**：清晰、无歧义地描述 AI 需要完成的具体工作。
+3. **约束条件 (Constraints)**：
+    - 根据【北极星指标】反推的硬性要求（例如：严禁胡说八道、回复长度限制、必须包含某些关键词）。
+    - 针对【业务场景】的合规性要求或语气要求。
+4. **思维链要求 (Chain of Thought)**：引导 AI 在输出结果前进行内部推理，以确保逻辑严密（如果场景复杂）。
+5. **输出格式 (Output Format)**：定义回复的结构（如 Markdown、JSON 或特定语气的文本）。
+
+# Design Principles
+- **指标对齐**：如果北极星指标是"专业度"，提示词应侧重引用知识库和术语；如果是"亲和力"，则侧重语气词和共情表达。
+- **模块化**：结构清晰，用户拿到后可以一眼看懂每一部分的作用。
+- **鲁棒性**：考虑到大模型的边界情况，增加预防误操作或越权的防御性描述。
+
+# Language
+始终使用中文输出生成的业务提示词。"""
 
 
 def init_session_state():
@@ -236,21 +286,24 @@ def render_phase_config():
     st.subheader("阶段一：场景定义与上传")
     st.divider()
 
-    c1, c2 = st.columns(2)
-    with c1:
-        scenario = st.text_input(
-            "测试场景",
-            value=st.session_state.scenario,
-            placeholder="例如：金融合规助手",
-        )
-        st.session_state.scenario = scenario
-    with c2:
-        north_star = st.text_input(
-            "北极星指标",
-            value=st.session_state.north_star,
-            placeholder="例如：专业度、安全性",
-        )
-        st.session_state.north_star = north_star
+    st.caption("业务场景（请尽量详细描述，越详细生成的 Prompt 越精准）")
+    scenario = st.text_area(
+        "业务场景",
+        value=st.session_state.scenario,
+        height=220,
+        placeholder="请详细描述：\n· 该 AI 产品的具体用途、目标用户画像\n· 典型使用场景与边界情况\n· 希望的语气、风格或合规要求\n\n例如：面向 6–10 岁儿童的故事生成助手，需在 2 分钟内产出 300 字以内、无暴力情节、语言浅白有趣的故事片段……",
+        help="描述越详细，大模型生成的业务提示词越贴合你的需求。",
+    )
+    st.session_state.scenario = scenario
+
+    st.divider()
+    north_star = st.text_input(
+        "北极星指标",
+        value=st.session_state.north_star,
+        placeholder="例如：趣味性、符合儿童心智、专业度、安全性",
+        help="衡量该 AI 表现好坏的核心业务标准，可写多条。",
+    )
+    st.session_state.north_star = north_star
 
     st.divider()
     uploaded = st.file_uploader("上传评测数据（仅限 CSV）", type=["csv"], help="需包含 question 列；可选 expected_answer（有则可不生成直接评测）")
@@ -286,16 +339,21 @@ def render_phase_config():
             if not st.session_state.api_key.strip():
                 st.error("请在侧边栏填写 API Key。")
             elif not st.session_state.scenario.strip() or not st.session_state.north_star.strip():
-                st.error("请填写测试场景和北极星指标。")
+                st.error("请填写业务场景和北极星指标。")
             elif st.session_state.uploaded_df is None or st.session_state.uploaded_df.empty:
                 st.error("请先上传包含 question 的 CSV 文件。")
             else:
-                st.session_state.generation_prompt = GENERATOR_SYSTEM_TEMPLATE.format(
-                    scenario=st.session_state.scenario,
-                    north_star=st.session_state.north_star,
-                )
-                st.session_state.phase = "GENERATION_PROMPT_EDIT"
-                st.rerun()
+                with st.spinner("正在调用大模型生成业务提示词…"):
+                    try:
+                        st.session_state.generation_prompt = generate_generation_prompt_in_app(
+                            st.session_state.scenario,
+                            st.session_state.north_star,
+                            st.session_state.api_key,
+                        )
+                        st.session_state.phase = "GENERATION_PROMPT_EDIT"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"生成 Prompt 失败（请检查 API Key 与网络）：{e}")
     with col_btn2:
         has_answer = (
             st.session_state.uploaded_df is not None
@@ -309,7 +367,7 @@ def render_phase_config():
             if not st.session_state.api_key.strip():
                 st.error("请在侧边栏填写 API Key。")
             elif not st.session_state.scenario.strip() or not st.session_state.north_star.strip():
-                st.error("请填写测试场景和北极星指标。")
+                st.error("请填写业务场景和北极星指标。")
             else:
                 with st.spinner("正在生成评测方案…"):
                     try:
