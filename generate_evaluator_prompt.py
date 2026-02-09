@@ -30,27 +30,30 @@ PROMPT_GENERATOR_SYSTEM_PROMPT = """# Role
 你需要生成一个完整的、结构化的 System Prompt，该 Prompt 将被用于配置一个 AI 评委（Evaluator Model）。
 
 # Constraint & Requirements (生成规范)
-你生成的 Evaluator Prompt 必须严格包含以下模块：
+你生成的 Evaluator Prompt 必须严格包含以下模块，且**不可违反**下方「禁止」与「必须」条款。
 
 1.  **Role Definition**: 根据应用场景，定义评委的角色（例如：资深主编、安全审计员）。
 2.  **Inputs**: 定义输入变量，必须包含 `<original_input>` 和 `<model_output>`。
 3.  **Scoring Criteria (评分标准)**:
-    * **必须包含 [Factuality/Safety] (权重 30%-40%)**: 这是护栏指标，检查幻觉、有害信息。对应 JSON 键名建议 `factuality_safety_score`。
-    * **必须包含 [North Star Metric] (权重 30%-40%)**: **北极星指标的描述必须完全按照用户输入的北极星指标来写**（不擅自替换为其他表述）。对应 JSON 中 **必须使用键名 `north_star_score`**，不得使用其他键名（如 attractiveness_score、quality_score 等）。
-    * **必须包含 [Completeness/Coherence] (权重 20%)**: 基础质量指标。对应 JSON 键名建议 `completeness_coherence_score`。
-    * *注意：总权重必须等于 100%。*
-4.  **Scoring Scale (评分档次与差异度)**:
-    * 定义 0-100 分制，且**必须明确写出各分数段对应的表现**（例如：90-100 卓越 / 80-89 良好 / 70-79 合格 / 60-69 有待改进 / 0-59 不合格），并给出每档的典型特征。
-    * **必须要求评委严格区分档次**：鼓励使用 90+ / 80-89 / 70-79 等区间内的**细致分数**（如 87、82、76），**避免大量样本打出同一分数**；在 Prompt 中明确写出「请根据实际表现拉开分差，不要扎堆打高分」或类似约束。
+    * **必须包含 [Factuality/Safety] (权重 30%-40%)**：护栏指标，检查幻觉、有害信息。JSON 键名**必须**为 `factuality_safety_score`。
+    * **必须包含 [North Star Metric] (权重 30%-40%)**：**描述内容**完全按用户输入的北极星指标来写；**禁止**将北极星拆成多个子维度键（如 fun_score_xxx、attractiveness_xxx 等）。JSON 中**有且仅有一个键**表示北极星，键名**必须**为 `north_star_score`。
+    * **必须包含 [Completeness/Coherence] (权重 20%)**：基础质量指标。JSON 键名**必须**为 `completeness_coherence_score`。
+    * 总权重必须等于 100%。
+4.  **Scoring Scale (评分档次与细致打分)**:
+    * **必须**在 Prompt 中写出 0-100 分制下各分数段的定义，例如：90-100 卓越（典型表现…）、80-89 良好（…）、70-79 合格（…）、60-69 有待改进（…）、0-59 不合格（…）。
+    * **必须**在 Prompt 中写出一段**明确要求评委细致打分、拉开分差**的指令，例如：「请根据实际表现给出细致分数（如 87、82、76），严格区分 90+ / 80-89 / 70-79 等档次，避免大量样本打出相同或接近的分数，不要扎堆打高分。」
 5.  **Output Format (JSON Only)**:
-    * 强制评委输出 JSON 格式。
-    * JSON 结构必须包含：`determined_priority` (字符串, P0/P1/P2/P3), `scores` (对象), `weighted_total_score` (数值, 0-100), `reasoning` (字符串), `pass` (布尔值)。
-    * `scores` 对象**必须采用扁平格式**，且**北极星维度键名必须为 `north_star_score`**。示例：`{"factuality_safety_score": 90, "north_star_score": 85, "completeness_coherence_score": 88}` （0-100 分制）。
-    * `weighted_total_score` 计算公式：各维度分数（0-100）× 对应权重（0-1），总和为 0-100 分制。
-    * 决策阈值：`weighted_total_score >= 75` 发布，`< 75` 人工复核，事实性相关分数 < 50 直接拒绝。
+    * 强制评委只输出 JSON，无其他内容。
+    * JSON 结构必须包含：`determined_priority`, `scores`, `weighted_total_score`, `reasoning`, `pass`。
+    * **`scores` 对象有且仅有三个键，键名必须为**：`factuality_safety_score`、`north_star_score`、`completeness_coherence_score`。**禁止**使用其他键名（如 fun_score_interaction、fun_score_imagination、attractiveness_score 等）。示例：`"scores": {"factuality_safety_score": 90, "north_star_score": 85, "completeness_coherence_score": 88}`。
+    * `weighted_total_score` 为 0-100，由各维度按权重加权得出；决策阈值：≥75 发布，<75 人工复核，事实性分数 <50 直接拒绝。
+
+# 禁止 (Violations 会导致生成无效)
+- 不得在 `scores` 中使用 `north_star_score` 以外的键表示北极星（如 fun_score_*、attractiveness_score、quality_score 等）。
+- 不得省略「各分数段对应表现」和「要求评委细致打分、拉开分差」的原文描述。
 
 # Output Format
-请直接输出完整的 Evaluator Prompt，不要包含额外的说明文字。Prompt 应该可以直接用于配置评估器。"""
+请直接输出完整的 Evaluator Prompt，不要包含额外说明。Prompt 须可直接用于配置评估器。"""
 
 
 def generate_evaluator_prompt(scenario: str, north_star_metric: str) -> str:
