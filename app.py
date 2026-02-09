@@ -1,6 +1,6 @@
 """
 LLM 评测流水线 - Streamlit 应用
-四阶段流程：配置 → 提示词确认 → 评测中 → 结果展示
+五阶段流程：配置 → 生成回答 → 提示词确认 → 评测中 → 结果展示
 """
 
 import io
@@ -47,10 +47,15 @@ st.set_page_config(
 )
 
 # ==================== 常量 ====================
-REQUIRED_CSV_COLUMNS = ["question", "expected_answer"]
+REQUIRED_CSV_COLUMNS = ["question"]
+OPTIONAL_ANSWER_COLUMN = "expected_answer"
+GENERATED_ANSWER_COLUMN = "generated_answer"
 DEFAULT_MODEL = "deepseek-chat"
 MODEL_OPTIONS = ["deepseek-chat", "deepseek-reasoner"]
-PHASES = ["CONFIG", "PROMPT_EDIT", "EVALUATING", "RESULT"]
+PHASES = ["CONFIG", "GENERATING", "PROMPT_EDIT", "EVALUATING", "RESULT"]
+GENERATOR_SYSTEM_TEMPLATE = """你是「{scenario}」场景下的专业助手。请严格围绕以下北极星指标来回答：{north_star}。
+
+要求：直接给出专业、完整的回答，不要额外元说明或重复题目。"""
 
 
 def init_session_state():
@@ -78,15 +83,11 @@ def init_session_state():
 
 
 def get_csv_template_bytes() -> bytes:
-    """生成示例 CSV 模板（question, expected_answer）"""
+    """生成示例 CSV 模板（仅 question，用于「生成回答」流程）"""
     template_df = pd.DataFrame({
         "question": [
             "示例问题 1：请简述合规要点",
             "示例问题 2：该场景下应如何回复客户？",
-        ],
-        "expected_answer": [
-            "示例期望回答 1：合规要点包括…",
-            "示例期望回答 2：应首先确认身份…",
         ],
     })
     buf = io.BytesIO()
@@ -104,29 +105,59 @@ def validate_csv(df: pd.DataFrame) -> tuple[bool, str]:
     return True, ""
 
 
+def run_single_generation(
+    question: str,
+    scenario: str,
+    north_star: str,
+    api_key: str,
+    model: str,
+) -> tuple[Optional[str], Optional[str]]:
+    """根据业务描述与北极星指标对单条题目生成回答。返回 (回答文本, 错误信息)。"""
+    if not (question or "").strip():
+        return None, "题目为空"
+    prev = os.environ.get("DEEPSEEK_API_KEY")
+    try:
+        os.environ["DEEPSEEK_API_KEY"] = api_key
+        client = LLMClient(
+            provider="deepseek",
+            model=model,
+            temperature=getattr(config, "DEEPSEEK_TEMPERATURE", 0.7),
+            max_tokens=getattr(config, "DEEPSEEK_MAX_TOKENS", 4000),
+        )
+        system_prompt = GENERATOR_SYSTEM_TEMPLATE.format(scenario=scenario, north_star=north_star)
+        answer = client.generate(system_prompt=system_prompt, user_prompt=(question or "").strip())
+        return (answer or "").strip(), None
+    except Exception as e:
+        return None, str(e)
+    finally:
+        if prev is not None:
+            os.environ["DEEPSEEK_API_KEY"] = prev
+        else:
+            os.environ.pop("DEEPSEEK_API_KEY", None)
+
+
+def _fill_evaluation_prompt(prompt: str, original_text: str, model_output: str) -> str:
+    """仅替换 {original_text} 与 {model_output}，避免 JSON 等花括号被 format 误解析。"""
+    return prompt.replace("{original_text}", original_text).replace("{model_output}", model_output)
+
+
 def run_single_evaluation(
     row: pd.Series,
     evaluation_prompt: str,
     api_key: str,
     model: str,
 ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """
-    对单行执行评测。返回 (评估结果字典, 错误信息)。
-    使用 question -> original_text, expected_answer -> model_output。
-    """
+    """对单行执行评测。model_output 优先用 generated_answer，否则 expected_answer。"""
     original_text = str(row.get("question", ""))
-    model_output = str(row.get("expected_answer", ""))
-    if not original_text.strip() or not model_output.strip() or model_output.lower() in ("nan", ""):
-        return None, "问题或期望回答为空，已跳过"
+    model_output = str(
+        row.get(GENERATED_ANSWER_COLUMN) or row.get(OPTIONAL_ANSWER_COLUMN) or ""
+    ).strip()
+    if not original_text.strip():
+        return None, "问题为空，已跳过"
+    if not model_output or model_output.lower() in ("nan", ""):
+        return None, "该行无回答内容（需先「生成回答」或上传带 expected_answer 的 CSV），已跳过"
 
-    try:
-        prompt_filled = evaluation_prompt.format(
-            original_text=original_text,
-            model_output=model_output,
-        )
-    except KeyError as e:
-        return None, f"评测提示词缺少占位符: {e}。请确保包含 {original_text} 和 {model_output} 的占位符。"
-
+    prompt_filled = _fill_evaluation_prompt(evaluation_prompt, original_text, model_output)
     prev_key = os.environ.get("DEEPSEEK_API_KEY")
     try:
         os.environ["DEEPSEEK_API_KEY"] = api_key
@@ -220,7 +251,7 @@ def render_phase_config():
         st.session_state.north_star = north_star
 
     st.divider()
-    uploaded = st.file_uploader("上传评测数据（仅限 CSV）", type=["csv"], help="需包含 question、expected_answer 列")
+    uploaded = st.file_uploader("上传评测数据（仅限 CSV）", type=["csv"], help="需包含 question 列；可选 expected_answer（有则可不生成直接评测）")
 
     if uploaded is not None:
         df = None
@@ -247,36 +278,112 @@ def render_phase_config():
         st.dataframe(df.head(3), use_container_width=True, hide_index=True)
 
     st.divider()
-    if st.button("生成评测方案", type="primary", use_container_width=False):
-        if not st.session_state.api_key.strip():
-            st.error("请在侧边栏填写 API Key。")
-            return
-        if not st.session_state.scenario.strip() or not st.session_state.north_star.strip():
-            st.error("请填写测试场景和北极星指标。")
-            return
-        if st.session_state.uploaded_df is None or st.session_state.uploaded_df.empty:
-            st.error("请先上传包含 question、expected_answer 的 CSV 文件。")
-            return
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("生成回答", type="primary", use_container_width=True):
+            if not st.session_state.api_key.strip():
+                st.error("请在侧边栏填写 API Key。")
+            elif not st.session_state.scenario.strip() or not st.session_state.north_star.strip():
+                st.error("请填写测试场景和北极星指标。")
+            elif st.session_state.uploaded_df is None or st.session_state.uploaded_df.empty:
+                st.error("请先上传包含 question 的 CSV 文件。")
+            else:
+                st.session_state.phase = "GENERATING"
+                st.rerun()
+    with col_btn2:
+        has_answer = (
+            st.session_state.uploaded_df is not None
+            and not st.session_state.uploaded_df.empty
+            and (
+                OPTIONAL_ANSWER_COLUMN in st.session_state.uploaded_df.columns
+                or GENERATED_ANSWER_COLUMN in st.session_state.uploaded_df.columns
+            )
+        )
+        if st.button("已有回答，直接生成评测方案", use_container_width=True, disabled=not has_answer):
+            if not st.session_state.api_key.strip():
+                st.error("请在侧边栏填写 API Key。")
+            elif not st.session_state.scenario.strip() or not st.session_state.north_star.strip():
+                st.error("请填写测试场景和北极星指标。")
+            else:
+                with st.spinner("正在生成评测方案…"):
+                    try:
+                        prompt = generate_evaluator_prompt_in_app(
+                            st.session_state.scenario,
+                            st.session_state.north_star,
+                            st.session_state.api_key,
+                        )
+                        st.session_state.generated_prompt = prompt
+                        st.session_state.evaluation_prompt = prompt
+                        st.session_state.phase = "PROMPT_EDIT"
+                        st.success("评测方案已生成，请确认并编辑下方提示词。")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"生成评测方案失败（请检查 API Key 与网络）：{e}")
 
+
+# ==================== Phase 2: 生成回答 ====================
+def render_phase_generating():
+    st.subheader("阶段二：生成回答")
+    st.divider()
+
+    df = st.session_state.uploaded_df
+    n = len(df) if df is not None else 0
+    api_key = st.session_state.api_key
+    model = st.session_state.model
+    scenario = st.session_state.scenario
+    north_star = st.session_state.north_star
+
+    if not api_key or df is None or n == 0:
+        st.error("配置或数据不完整，请返回上一步。")
+        if st.button("返回配置"):
+            st.session_state.phase = "CONFIG"
+            st.rerun()
+        return
+
+    if GENERATED_ANSWER_COLUMN not in df.columns:
+        df[GENERATED_ANSWER_COLUMN] = None
+
+    progress_bar = st.progress(0.0, text="准备中…")
+    status = st.status("生成回答中…", expanded=True)
+
+    with status:
+        for i, (idx, row) in enumerate(df.iterrows()):
+            progress_bar.progress((i + 1) / n, text=f"正在生成第 {i+1}/{n} 条…")
+            q = str(row.get("question", "") or "").strip()
+            st.write(f"[{i+1}/{n}] {q[:60]}…" if len(q) > 60 else f"[{i+1}/{n}] {q}")
+            if not q:
+                df.at[idx, GENERATED_ANSWER_COLUMN] = ""
+                st.write("  ⏭ 题目为空，已跳过")
+                continue
+            answer, err = run_single_generation(q, scenario, north_star, api_key, model)
+            if err:
+                df.at[idx, GENERATED_ANSWER_COLUMN] = ""
+                st.write(f"  ❌ {err}")
+            else:
+                df.at[idx, GENERATED_ANSWER_COLUMN] = answer or ""
+                st.write("  ✅ 已生成")
+
+    progress_bar.progress(1.0, text="生成完成")
+    status.update(label="生成完成", state="complete")
+    st.session_state.uploaded_df = df
+
+    st.divider()
+    if st.button("下一步：生成评测方案", type="primary", use_container_width=False):
         with st.spinner("正在根据场景与北极星指标生成评测方案…"):
             try:
-                prompt = generate_evaluator_prompt_in_app(
-                    st.session_state.scenario,
-                    st.session_state.north_star,
-                    st.session_state.api_key,
-                )
+                prompt = generate_evaluator_prompt_in_app(scenario, north_star, api_key)
                 st.session_state.generated_prompt = prompt
                 st.session_state.evaluation_prompt = prompt
                 st.session_state.phase = "PROMPT_EDIT"
                 st.success("评测方案已生成，请确认并编辑下方提示词。")
                 st.rerun()
             except Exception as e:
-                st.error(f"生成评测方案失败（请检查 API Key 与网络）：{e}")
+                st.error(f"生成评测方案失败：{e}")
 
 
-# ==================== Phase 2: 提示词确认 ====================
+# ==================== Phase 3: 提示词确认 ====================
 def render_phase_prompt_edit():
-    st.subheader("阶段二：提示词确认")
+    st.subheader("阶段三：提示词确认")
     st.divider()
 
     evaluation_prompt = st.text_area(
@@ -287,7 +394,6 @@ def render_phase_prompt_edit():
     )
     st.session_state.evaluation_prompt = evaluation_prompt
 
-    # 占位符检查
     if "{original_text}" not in evaluation_prompt or "{model_output}" not in evaluation_prompt:
         st.warning("提示词中建议包含占位符 `{original_text}` 与 `{model_output}`，以便对每条题目进行评测。")
 
@@ -300,13 +406,13 @@ def render_phase_prompt_edit():
         st.rerun()
 
 
-# ==================== Phase 3: 执行评测 ====================
+# ==================== Phase 4: 执行评测 ====================
 def render_phase_evaluating():
-    st.subheader("阶段三：执行评测")
+    st.subheader("阶段四：执行评测")
     st.divider()
 
     df = st.session_state.uploaded_df
-    n = len(df)
+    n = len(df) if df is not None else 0
     api_key = st.session_state.api_key
     model = st.session_state.model
     evaluation_prompt = st.session_state.evaluation_prompt
@@ -333,19 +439,15 @@ def render_phase_evaluating():
             df[col] = None
 
     start_time = time.time()
-    log_lines = []
-
     with status:
         for i, (idx, row) in enumerate(df.iterrows()):
             progress_bar.progress((i + 1) / n, text=f"正在评测第 {i+1}/{n} 条…")
-            log_lines.append(f"[{i+1}/{n}] 题目: {str(row.get('question', ''))[:50]}…")
-            st.write(log_lines[-1])
+            st.write(f"[{i+1}/{n}] 题目: {str(row.get('question', ''))[:50]}…")
 
             result, err = run_single_evaluation(row, evaluation_prompt, api_key, model)
             if err:
                 df.at[idx, "decision"] = "ERROR"
                 df.at[idx, "reason"] = f"error: {err}"
-                log_lines.append(f"  ❌ {err}")
                 st.write(f"  ❌ {err}")
             else:
                 df.at[idx, "eval_priority"] = result.get("priority")
@@ -358,7 +460,6 @@ def render_phase_evaluating():
                 df.at[idx, "reason"] = result.get("reason")
                 df.at[idx, "reasoning"] = result.get("reasoning")
                 df.at[idx, "pass"] = result.get("pass")
-                log_lines.append(f"  ✅ 得分: {result.get('weighted_total_score', 0):.1f} | {result.get('decision', '')}")
                 st.write(f"  ✅ 得分: {result.get('weighted_total_score', 0):.1f} | {result.get('decision', '')}")
 
     elapsed = time.time() - start_time
@@ -372,9 +473,9 @@ def render_phase_evaluating():
     st.rerun()
 
 
-# ==================== Phase 4: 结果展示 ====================
+# ==================== Phase 5: 结果展示 ====================
 def render_phase_result():
-    st.subheader("阶段四：结果展示")
+    st.subheader("阶段五：结果展示")
     st.divider()
 
     df = st.session_state.results_df
@@ -382,12 +483,10 @@ def render_phase_result():
         st.warning("暂无结果，请先完成评测。")
         return
 
-    # 只统计有效评分行
     valid = df[df["weighted_total_score"].notna()]
     n_valid = len(valid)
     n_total = len(df)
 
-    # 核心指标卡片
     st.caption("核心指标")
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -408,7 +507,6 @@ def render_phase_result():
 
     st.divider()
 
-    # 得分分布柱状图
     if n_valid > 0 and "weighted_total_score" in df.columns:
         st.caption("得分分布")
         score_counts = valid["weighted_total_score"].round(0).value_counts().sort_index()
@@ -422,14 +520,12 @@ def render_phase_result():
         st.plotly_chart(fig, use_container_width=True)
     st.divider()
 
-    # 完整结果表格
     st.caption("完整结果（含原题、回答、评分理由）")
-    display_cols = ["question", "expected_answer", "weighted_total_score", "decision", "reasoning"]
+    display_cols = ["question", GENERATED_ANSWER_COLUMN, OPTIONAL_ANSWER_COLUMN, "weighted_total_score", "decision", "reasoning"]
     display_cols = [c for c in display_cols if c in df.columns]
     st.dataframe(df[display_cols] if display_cols else df, use_container_width=True, hide_index=True)
 
     st.divider()
-    # 导出 CSV
     buf = io.BytesIO()
     df.to_csv(buf, index=False, encoding="utf-8-sig")
     st.download_button(
@@ -446,12 +542,14 @@ def main():
     render_sidebar()
 
     st.title("📊 LLM 评测流水线")
-    st.caption("配置 → 提示词确认 → 评测 → 结果展示")
+    st.caption("配置 → 生成回答 → 提示词确认 → 评测 → 结果展示")
     st.divider()
 
     phase = st.session_state.phase
     if phase == "CONFIG":
         render_phase_config()
+    elif phase == "GENERATING":
+        render_phase_generating()
     elif phase == "PROMPT_EDIT":
         render_phase_prompt_edit()
     elif phase == "EVALUATING":
