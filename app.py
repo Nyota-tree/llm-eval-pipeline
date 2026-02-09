@@ -433,6 +433,17 @@ def render_phase_generating():
     if GENERATED_ANSWER_COLUMN not in df.columns:
         df[GENERATED_ANSWER_COLUMN] = None
 
+    # 若所有有题目的行已有生成回答，则不再重新生成，直接展示结果与「下一步」（避免点击「生成评测方案」后 rerun 时又跑一遍）
+    rows_with_question = (df["question"].notna() & df["question"].astype(str).str.strip() != "").sum()
+    if rows_with_question > 0 and GENERATED_ANSWER_COLUMN in df.columns:
+        filled = (df[GENERATED_ANSWER_COLUMN].notna() & (df[GENERATED_ANSWER_COLUMN].astype(str).str.strip() != "")).sum()
+        if filled >= rows_with_question:
+            st.caption("生成已完成，可直接点击下方「下一步：生成评测方案」。")
+            st.session_state.uploaded_df = df
+            # 跳转到下方的「生成结果 + 下一步」展示，不执行下面的 for 循环
+            _render_generation_result_and_next(df, api_key)
+            return
+
     progress_bar = st.progress(0.0, text="准备中…")
     status = st.status("生成回答中…", expanded=True)
 
@@ -458,6 +469,11 @@ def render_phase_generating():
     st.session_state.uploaded_df = df
 
     st.divider()
+    _render_generation_result_and_next(df, api_key)
+
+
+def _render_generation_result_and_next(df: pd.DataFrame, api_key: str):
+    """展示生成结果（只读）与「下一步：生成评测方案」按钮。"""
     st.subheader("生成结果（只读）")
     st.caption("以下为根据当前生成 Prompt 得到的回答，仅供查看不可修改。")
     if GENERATED_ANSWER_COLUMN in df.columns:
@@ -626,8 +642,13 @@ def render_phase_result():
             st.caption("无有效数值得分，跳过得分分布图。")
     st.divider()
 
-    st.caption("完整结果（含原题、回答、评分理由）")
-    display_cols = ["question", GENERATED_ANSWER_COLUMN, OPTIONAL_ANSWER_COLUMN, "weighted_total_score", "decision", "reasoning"]
+    st.caption("完整结果（含原题、回答、各维度小分、总分、决策与理由）")
+    st.caption("说明：REJECT 表示「事实性/安全性」分数低于阈值（0–10 分制低于 5 分，或 0–100 分制低于 50 分），与总分无关；请在下方表格中查看各维度小分。")
+    display_cols = [
+        "question", GENERATED_ANSWER_COLUMN, OPTIONAL_ANSWER_COLUMN,
+        "factuality_score", "completeness_score", "adherence_score", "attractiveness_score",
+        "weighted_total_score", "decision", "reason", "reasoning",
+    ]
     display_cols = [c for c in display_cols if c in df.columns]
     st.dataframe(df[display_cols] if display_cols else df, use_container_width=True, hide_index=True)
 
