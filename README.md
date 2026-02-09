@@ -58,114 +58,57 @@ graph TD
 
 ## 🚀 快速开始
 
-### 💡 产品经理友好：使用 Cursor 零代码配置
+### 🌐 前端页面使用方法（Streamlit）
 
-**本项目的核心优势**：你不需要写任何代码！直接使用 Cursor（或任何 AI 编程助手）帮你配置即可。
+**推荐**：在浏览器中打开网页即可完成「配置 → 生成 Prompt → 评测 → 下载结果」全流程，无需安装或改配置文件。
 
-#### 📋 准备工作清单（5 分钟搞定）
+#### 访问链接
 
-在开始之前，你需要准备以下材料：
+**[https://llm-eval-pipeline-nyota.streamlit.app/](https://llm-eval-pipeline-nyota.streamlit.app/)**
 
-1. **API Key（必需）**
-   - **DeepSeek**（推荐，性价比高）：https://platform.deepseek.com/
-   - **OpenAI**：https://platform.openai.com/api-keys
-   - **Anthropic**：https://console.anthropic.com/
-   - 任选一个即可，建议用 DeepSeek（便宜且效果好）
+在浏览器中打开上述链接即可使用。使用前请准备好 **DeepSeek API Key**（在侧边栏填写），以及包含 **`question`** 列的 CSV 数据（可先点击侧边栏「下载 CSV 模板」按模板准备）。
 
-2. **输入数据 CSV 文件**
-   - 准备一个 Excel 或 CSV 文件
-   - 第一列必须是 `input_text`（列名必须完全一致）
-   - 每行一条需要评估的内容
-   - 示例格式：
-     ```csv
-     input_text
-     "请介绍一下人工智能的基本概念"
-     "解释什么是机器学习"
-     "描述深度学习与传统机器学习的区别"
-     ```
-   - 或者直接使用项目自带的示例文件：`examples/input_example.csv`
+#### 网页里的使用流程
 
-3. **安装 Python 环境**（如果还没有）
-   - 下载 Python 3.10+：https://www.python.org/downloads/
-   - 安装时勾选 "Add Python to PATH"
+页面顶部会显示当前所在阶段：**配置 → 业务 Prompt → 评估 Prompt → 生成回答 → 评测 → 结果展示**。按顺序完成以下六步即可跑通一次评测。
 
-#### 方式 1: 让 Cursor 帮你配置（推荐给产品经理）
+| 阶段 | 页面上你会看到 | 你需要做的 |
+|------|----------------|------------|
+| **一、场景定义与上传** | 业务场景、北极星指标两个文本框 + 上传 CSV 区域 | 填写「业务场景」和「北极星指标」；上传 CSV（必须含 `question` 列，可选 `expected_answer`）。点「下一步：生成 Prompt」；若 CSV 里已有回答，可点「已有回答，直接生成评测方案」跳过生成。 |
+| **二、业务 Prompt 确认** | 一段可编辑的「业务 Prompt」文案 | 确认或修改后，点「下一步：生成评估 Prompt」，系统会按你的场景与北极星指标生成评测用 Prompt。 |
+| **三、评估 Prompt 确认** | 一段可编辑的「评估 Prompt」文案 | 确认或修改评测标准；文中须包含 `{original_text}` 与 `{model_output}`（评测时会替换为题目和回答）。点「确认并开始处理数据」进入下一阶段。 |
+| **四、生成回答** | 进度与每条题目的生成状态 | 系统会按业务 Prompt 逐条调用模型生成回答。若数据里已有 `generated_answer` 或 `expected_answer`，可点「下一步：开始评测」跳过；否则等生成完成后点该按钮。 |
+| **五、评测** | 进度与每条题目的评测状态 | 系统会按评估 Prompt 对「题目 + 回答」逐条打分，得到各维度小分与总分。完成后会自动跳到结果页。 |
+| **六、结果展示** | 平均分、通过率、得分分布图、各维度小分表、完整结果表 | 查看指标与表格；需要留存时点击「下载完整结果 CSV」导出。结果列包含：事实性/安全性、北极星指标、完整性与连贯性、加权总分、决策、理由等，与当前评估 Prompt 输出一致。 |
 
-**Step 1: 环境初始化（只需做一次）**
+#### 侧边栏说明
 
-在 Cursor 中打开项目，告诉 Cursor：
-```
-帮我安装这个项目的依赖，运行 pip install -r requirements.txt
-```
+- **API Key**：必填，用于生成 Prompt、生成回答和评测（建议使用 [DeepSeek](https://platform.deepseek.com/) 的 Key）。
+- **Model**：选择 `deepseek-chat` 或 `deepseek-reasoner`，评测阶段会使用该模型。
+- **下载 CSV 模板**：下载仅含 `question` 列的模板，按模板填好数据后再上传。
+- **🔄 重新开始**：清空当前会话，从阶段一重新来一遍。
 
-**Step 2: 配置 API Key**
+#### 常见问题
 
-1. 复制 `.env.example` 文件，重命名为 `.env`
-2. 打开 `.env` 文件，告诉 Cursor：
-   ```
-   帮我在 .env 文件中填入我的 DeepSeek API Key，key 是 sk-xxxxxxxxxxxxx
-   ```
-   （替换为你的实际 API Key）
+- **提示“配置或数据不完整，请返回上一步”**：检查是否在阶段一填了场景和北极星、上传了含 `question` 的 CSV，并在侧边栏填了 API Key；若在阶段四报错，先点「返回评估 Prompt」回到阶段三，再点「确认并开始处理数据」重新进入。
+- **提示“须包含占位符 {original_text} 与 {model_output}”**：在阶段三的评估 Prompt 里保留这两个占位符，评测时会自动替换。
+- **想用自己的评测 Prompt**：在阶段三直接编辑或粘贴你的评估 Prompt，再点「确认并开始处理数据」即可。
 
-**Step 3: 配置项目参数**
+#### 本地运行（可选）
 
-打开 `config.py`，告诉 Cursor 你的需求，例如：
-```
-帮我配置这个项目：
-- 使用 DeepSeek API
-- 生成器温度设为 0.7
-- 评估器使用 deepseek-reasoner，温度设为 0
-- 我的应用场景是：小红书文案生成
-- 北极星指标是：幽默感和传播力
+若希望在本机运行同一套页面：
+
+```bash
+pip install -r requirements.txt
+# 配置 .env 中的 DEEPSEEK_API_KEY（可选，也可在页面侧边栏填写）
+streamlit run app.py
 ```
 
-**Step 4: 生成评估标准（可选但推荐）**
+浏览器会打开 `http://localhost:8501`，使用流程与上述网页一致。
 
-告诉 Cursor：
-```
-帮我运行 generate_evaluator_prompt.py，场景是"小红书文案生成"，指标是"幽默感和传播力"
-```
+---
 
-脚本会：
-1. 调用 LLM 生成专业的评估员 Prompt
-2. 保存到文件（默认: `generated_evaluator_prompt.txt`）
-3. **询问是否自动更新到 `config.py`**：输入 `y` 确认，生成的 Prompt 会自动替换 `config.py` 中的 `EVALUATION_PROMPT`
-
-**重要提示**：
-- 生成的 Prompt 会保存到文件，你可以先查看再决定是否更新到 `config.py`
-- 如果选择更新，脚本会自动替换 `config.py` 中的 `EVALUATION_PROMPT` 变量
-- 生成器的 `SYSTEM_PROMPT` 需要手动编辑 `config.py` 来配置（或让 Cursor 帮你修改）
-
-**Step 5: 准备输入数据**
-
-- 如果使用示例文件：直接告诉 Cursor 使用 `examples/input_example.csv`
-- 如果有自己的数据：告诉 Cursor：
-  ```
-  帮我检查一下我的 input.csv 文件格式是否正确，第一列是不是 input_text
-  ```
-
-**Step 6: 运行批量生成**
-
-告诉 Cursor：
-```
-帮我运行批量生成，输入文件是 examples/input_example.csv，输出到 output.csv
-```
-
-**Step 7: 运行批量评估**
-
-告诉 Cursor：
-```
-帮我运行批量评估，输入文件是 output.csv，输出到 evaluated.csv
-```
-
-**优势**：
-- ✅ 无需学习 Python 语法
-- ✅ 无需理解命令行参数
-- ✅ 直接用自然语言描述需求
-- ✅ Cursor 自动帮你生成命令并执行
-- ✅ 遇到错误直接问 Cursor，它会帮你解决
-
-#### 方式 2: 传统命令行方式
+#### 传统命令行方式
 
 ### 1. 环境准备
 
@@ -248,6 +191,7 @@ python batch_evaluator.py batch_output.csv batch_evaluation_results.csv
 
 ```
 /
+├── app.py               # Streamlit 前端（六阶段评测流水线，推荐使用）
 ├── batch_generator.py   # 生成器核心
 ├── batch_evaluator.py   # 评估器核心
 ├── generate_evaluator_prompt.py  # Prompt 生成器

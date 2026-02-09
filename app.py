@@ -274,7 +274,7 @@ def render_sidebar():
         )
         st.divider()
 
-        if st.button("🔄 重新开始", use_container_width=True):
+        if st.button("🔄 重新开始", width="stretch"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             init_session_state()
@@ -330,12 +330,12 @@ def render_phase_config():
             return
         st.session_state.uploaded_df = df
         st.caption("预览（前 3 行）")
-        st.dataframe(df.head(3), use_container_width=True, hide_index=True)
+        st.dataframe(df.head(3), width="stretch", hide_index=True)
 
     st.divider()
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("下一步：生成 Prompt", type="primary", use_container_width=True):
+        if st.button("下一步：生成 Prompt", type="primary", width="stretch"):
             if not st.session_state.api_key.strip():
                 st.error("请在侧边栏填写 API Key。")
             elif not st.session_state.scenario.strip() or not st.session_state.north_star.strip():
@@ -363,7 +363,7 @@ def render_phase_config():
                 or GENERATED_ANSWER_COLUMN in st.session_state.uploaded_df.columns
             )
         )
-        if st.button("已有回答，直接生成评测方案", use_container_width=True, disabled=not has_answer):
+        if st.button("已有回答，直接生成评测方案", width="stretch", disabled=not has_answer):
             if not st.session_state.api_key.strip():
                 st.error("请在侧边栏填写 API Key。")
             elif not st.session_state.scenario.strip() or not st.session_state.north_star.strip():
@@ -400,7 +400,7 @@ def render_phase_generation_prompt_edit():
     st.session_state.generation_prompt = generation_prompt
 
     st.divider()
-    if st.button("下一步：生成评估 Prompt", type="primary", use_container_width=False):
+    if st.button("下一步：生成评估 Prompt", type="primary", width="content"):
         if not (st.session_state.generation_prompt or "").strip():
             st.error("请填写或保留业务 Prompt。")
             return
@@ -419,7 +419,7 @@ def render_phase_generation_prompt_edit():
             except Exception as e:
                 st.error(f"生成评估 Prompt 失败（请检查 API Key 与网络）：{e}")
 
-    if st.button("返回配置", use_container_width=False):
+    if st.button("返回配置", width="content"):
         st.session_state.phase = "CONFIG"
         st.rerun()
 
@@ -491,9 +491,9 @@ def _render_generation_result_and_next(df: pd.DataFrame, api_key: str):
     if GENERATED_ANSWER_COLUMN in df.columns:
         display_df = df[["question", GENERATED_ANSWER_COLUMN]].copy()
         display_df.columns = ["题目", "生成回答"]
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width="stretch", hide_index=True)
     st.divider()
-    if st.button("下一步：开始评测", type="primary", use_container_width=False):
+    if st.button("下一步：开始评测", type="primary", width="content"):
         st.session_state.phase = "EVALUATING"
         st.rerun()
 
@@ -516,14 +516,14 @@ def render_phase_prompt_edit():
         st.warning("提示词中建议包含占位符 `{original_text}` 与 `{model_output}`，以便对每条题目进行评测。")
 
     st.divider()
-    if st.button("确认并开始处理数据", type="primary", use_container_width=False):
+    if st.button("确认并开始处理数据", type="primary", width="content"):
         if not st.session_state.evaluation_prompt.strip():
             st.error("请填写或保留评估提示词。")
             return
         st.session_state.phase = "GENERATING"
         st.rerun()
 
-    if st.button("返回业务 Prompt", use_container_width=False):
+    if st.button("返回业务 Prompt", width="content"):
         st.session_state.phase = "GENERATION_PROMPT_EDIT"
         st.rerun()
 
@@ -640,7 +640,7 @@ def render_phase_result():
                 title="加权总分分布",
             )
             fig.update_layout(showlegend=False, margin=dict(t=40))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.caption("无有效数值得分，跳过得分分布图。")
     st.divider()
@@ -669,7 +669,7 @@ def render_phase_result():
         labels = [score_label_map[c] for c in existing_score_cols]
         score_df = df[existing_score_cols].copy()
         score_df.columns = labels
-        st.dataframe(score_df, use_container_width=True, hide_index=True, column_config={lb: st.column_config.NumberColumn(lb, format="%.1f") for lb in labels})
+        st.dataframe(score_df, width="stretch", hide_index=True, column_config={lb: st.column_config.NumberColumn(lb, format="%.1f") for lb in labels})
         st.divider()
 
     st.caption("完整结果（含原题、回答、各维度小分、总分、决策与理由）")
@@ -691,7 +691,7 @@ def render_phase_result():
             col_config[col] = st.column_config.NumberColumn(label, format="%.1f")
     st.dataframe(
         df[display_cols] if display_cols else df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config=col_config if col_config else None,
     )
