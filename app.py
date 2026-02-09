@@ -661,6 +661,12 @@ def render_phase_result():
             )
             fig.update_layout(showlegend=False, margin=dict(t=40))
             st.plotly_chart(fig, width="stretch")
+            if len(score_counts) <= 2 and score_counts.sum() > 5:
+                with st.expander("💡 分数集中、缺乏差异度？", expanded=False):
+                    st.caption(
+                        "若多数样本得分接近，可在「评估 Prompt」中要求评委严格区分档次（如 90+ / 80–89 / 70–79），"
+                        "并明确各分数段对应的表现描述，避免扎堆打高分。修改后重新跑评测即可。"
+                    )
         else:
             st.caption("无有效数值得分，跳过得分分布图。")
     st.divider()

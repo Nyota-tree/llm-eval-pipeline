@@ -62,7 +62,7 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in scores.items():
             if isinstance(value, dict):
                 score_value = value.get("score", 0)
-                key_lower = key.lower()
+                key_lower = (key or "").lower()
                 
                 # 匹配各种可能的键名
                 if "factuality" in key_lower or "safety" in key_lower:
@@ -73,6 +73,8 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
                     adherence_score = score_value
                 elif "attractiveness" in key_lower or "quality" in key_lower or "appeal" in key_lower:
                     attractiveness_score = score_value
+                if "north_star" in key_lower or "northstar" in key_lower.replace("_", "") or "北极星" in (key or ""):
+                    north_star_score_val = score_value
     else:
         # 扁平格式：直接获取分数
         factuality_score = scores.get('factuality_score', 0)
@@ -84,6 +86,19 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
         factuality_score = scores.get('factuality_safety_score', factuality_score)
         completeness_score = scores.get('completeness_coherence_score', completeness_score)
         north_star_score_val = scores.get('north_star_score', 0)  # 北极星指标，单独一列展示
+        # 始终遍历 scores 匹配「北极星」相关键名（含大小写、下划线、中文等变体），避免漏识别
+        if north_star_score_val == 0 and scores:
+            for key, value in scores.items():
+                if not isinstance(value, (int, float, str)):
+                    continue
+                key_lower = (key or "").lower().replace(" ", "").replace("_", "")
+                if "northstar" in key_lower or "北极星" in (key or "") or "north_star" in (key or "").lower():
+                    try:
+                        north_star_score_val = float(value) if value != "" and value is not None else 0
+                        if north_star_score_val > 0:
+                            break
+                    except (ValueError, TypeError):
+                        pass
         if attractiveness_score == 0 and north_star_score_val:
             attractiveness_score = north_star_score_val  # 兼容旧展示逻辑
         
@@ -130,6 +145,25 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
         attractiveness_score = response_json.get('attractiveness_score', response_json.get('north_star_score', response_json.get('attractiveness', 0)))
     if north_star_score_val == 0:
         north_star_score_val = response_json.get('north_star_score', 0) or scores.get('north_star_score', 0)
+    if north_star_score_val == 0:
+        # 从顶层或 scores 中按键名再找一次（兼容大小写、中文「核心吸引力」等）
+        for obj in (response_json, scores):
+            if not isinstance(obj, dict):
+                continue
+            for key, value in obj.items():
+                if not isinstance(value, (int, float, str)):
+                    continue
+                k = (key or "").lower()
+                if "north_star" in k or "northstar" in k.replace("_", "") or "北极星" in (key or "") or "核心吸引力" in (key or ""):
+                    try:
+                        v = float(value) if value != "" and value is not None else 0
+                        if v > 0:
+                            north_star_score_val = v
+                            break
+                    except (ValueError, TypeError):
+                        pass
+            if north_star_score_val > 0:
+                break
     
     # 确保分数是数值类型
     try:

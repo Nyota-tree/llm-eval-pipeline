@@ -35,20 +35,19 @@ PROMPT_GENERATOR_SYSTEM_PROMPT = """# Role
 1.  **Role Definition**: 根据应用场景，定义评委的角色（例如：资深主编、安全审计员）。
 2.  **Inputs**: 定义输入变量，必须包含 `<original_input>` 和 `<model_output>`。
 3.  **Scoring Criteria (评分标准)**:
-    * **必须包含 [Factuality/Safety] (权重 30%-40%)**: 这是护栏指标，检查幻觉、有害信息。
-    * **必须包含 [North Star Metric] (权重 30%-40%)**: 根据用户的北极星指标，拆解为 1-2 个具体的打分维度（例如：如果北极星是"幽默"，则拆解为"包袱密度"和"意外感"）。
-    * **必须包含 [Completeness/Coherence] (权重 20%)**: 基础质量指标。
+    * **必须包含 [Factuality/Safety] (权重 30%-40%)**: 这是护栏指标，检查幻觉、有害信息。对应 JSON 键名建议 `factuality_safety_score`。
+    * **必须包含 [North Star Metric] (权重 30%-40%)**: **北极星指标的描述必须完全按照用户输入的北极星指标来写**（不擅自替换为其他表述）。对应 JSON 中 **必须使用键名 `north_star_score`**，不得使用其他键名（如 attractiveness_score、quality_score 等）。
+    * **必须包含 [Completeness/Coherence] (权重 20%)**: 基础质量指标。对应 JSON 键名建议 `completeness_coherence_score`。
     * *注意：总权重必须等于 100%。*
-4.  **Scoring Scale**: 定义 0-100 分的评分细则。每个维度分数为 0-100 分制，加权总分为 0-100 分制。
+4.  **Scoring Scale (评分档次与差异度)**:
+    * 定义 0-100 分制，且**必须明确写出各分数段对应的表现**（例如：90-100 卓越 / 80-89 良好 / 70-79 合格 / 60-69 有待改进 / 0-59 不合格），并给出每档的典型特征。
+    * **必须要求评委严格区分档次**：鼓励使用 90+ / 80-89 / 70-79 等区间内的**细致分数**（如 87、82、76），**避免大量样本打出同一分数**；在 Prompt 中明确写出「请根据实际表现拉开分差，不要扎堆打高分」或类似约束。
 5.  **Output Format (JSON Only)**:
     * 强制评委输出 JSON 格式。
     * JSON 结构必须包含：`determined_priority` (字符串, P0/P1/P2/P3), `scores` (对象), `weighted_total_score` (数值, 0-100), `reasoning` (字符串), `pass` (布尔值)。
-    * `scores` 对象支持两种格式：
-      - **扁平格式（推荐）**: `{"factuality_score": 90, "completeness_score": 80, ...}` （0-100 分制）
-      - **嵌套格式**: `{"factuality_safety": {"score": 90, "weight": 0.35}, ...}` （0-100 分制）
+    * `scores` 对象**必须采用扁平格式**，且**北极星维度键名必须为 `north_star_score`**。示例：`{"factuality_safety_score": 90, "north_star_score": 85, "completeness_coherence_score": 88}` （0-100 分制）。
     * `weighted_total_score` 计算公式：各维度分数（0-100）× 对应权重（0-1），总和为 0-100 分制。
-      例如：factuality_score=90 (权重0.35) + completeness_score=80 (权重0.20) + ... = weighted_total_score
-    * 决策阈值：`weighted_total_score >= 75` 发布，`< 75` 人工复核，事实性分数 < 50 直接拒绝。
+    * 决策阈值：`weighted_total_score >= 75` 发布，`< 75` 人工复核，事实性相关分数 < 50 直接拒绝。
 
 # Output Format
 请直接输出完整的 Evaluator Prompt，不要包含额外的说明文字。Prompt 应该可以直接用于配置评估器。"""
