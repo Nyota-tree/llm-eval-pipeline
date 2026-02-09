@@ -79,6 +79,13 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
         adherence_score = scores.get('adherence_score', 0)
         attractiveness_score = scores.get('attractiveness_score', 0)
         
+        # 兼容常见自定义键名（如 factuality_safety_score / north_star_score / completeness_coherence_score）
+        factuality_score = scores.get('factuality_safety_score', factuality_score)
+        completeness_score = scores.get('completeness_coherence_score', completeness_score)
+        north_star = scores.get('north_star_score', 0)
+        if attractiveness_score == 0 and north_star:
+            attractiveness_score = north_star  # 北极星指标分展示在「吸引力」列
+        
         # 如果直接键不存在，尝试其他可能的键名
         if factuality_score == 0:
             factuality_score = scores.get('factuality', scores.get('safety_score', 0))
@@ -102,22 +109,22 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
                 if "factuality" in key_lower or "safety" in key_lower or "安全" in key_lower or "事实" in key_lower:
                     if factuality_score == 0:
                         factuality_score = v
-                elif "completeness" in key_lower or "coverage" in key_lower or "完整" in key_lower:
+                elif "completeness" in key_lower or "coverage" in key_lower or "完整" in key_lower or "coherence" in key_lower or "连贯" in key_lower:
                     if completeness_score == 0:
                         completeness_score = v
                 elif "adherence" in key_lower or "instruction" in key_lower or "compliance" in key_lower or "遵循" in key_lower:
                     if adherence_score == 0:
                         adherence_score = v
-                elif "attractiveness" in key_lower or "quality" in key_lower or "appeal" in key_lower or "吸引" in key_lower or "质量" in key_lower:
+                elif "attractiveness" in key_lower or "quality" in key_lower or "appeal" in key_lower or "吸引" in key_lower or "质量" in key_lower or "north_star" in key_lower or "北极星" in key_lower:
                     if attractiveness_score == 0:
                         attractiveness_score = v
     
     # 若 scores 内仍未取到有效小分，尝试从 JSON 顶层读取
     if factuality_score == 0 and completeness_score == 0 and adherence_score == 0 and attractiveness_score == 0:
-        factuality_score = response_json.get('factuality_score', response_json.get('factuality', 0))
-        completeness_score = response_json.get('completeness_score', response_json.get('completeness', 0))
+        factuality_score = response_json.get('factuality_score', response_json.get('factuality_safety_score', response_json.get('factuality', 0)))
+        completeness_score = response_json.get('completeness_score', response_json.get('completeness_coherence_score', response_json.get('completeness', 0)))
         adherence_score = response_json.get('adherence_score', response_json.get('adherence', 0))
-        attractiveness_score = response_json.get('attractiveness_score', response_json.get('attractiveness', 0))
+        attractiveness_score = response_json.get('attractiveness_score', response_json.get('north_star_score', response_json.get('attractiveness', 0)))
     
     # 确保分数是数值类型
     try:
