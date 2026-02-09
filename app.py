@@ -1,6 +1,6 @@
 """
 LLM 评测流水线 - Streamlit 应用
-五阶段流程：配置 → 生成回答 → 提示词确认 → 评测中 → 结果展示
+六阶段流程：配置 → 生成 Prompt 确认 → 生成回答 → 评测提示词确认 → 评测 → 结果展示
 """
 
 import io
@@ -52,7 +52,7 @@ OPTIONAL_ANSWER_COLUMN = "expected_answer"
 GENERATED_ANSWER_COLUMN = "generated_answer"
 DEFAULT_MODEL = "deepseek-chat"
 MODEL_OPTIONS = ["deepseek-chat", "deepseek-reasoner"]
-PHASES = ["CONFIG", "GENERATING", "PROMPT_EDIT", "EVALUATING", "RESULT"]
+PHASES = ["CONFIG", "GENERATION_PROMPT_EDIT", "GENERATING", "PROMPT_EDIT", "EVALUATING", "RESULT"]
 GENERATOR_SYSTEM_TEMPLATE = """你是「{scenario}」场景下的专业助手。请严格围绕以下北极星指标来回答：{north_star}。
 
 要求：直接给出专业、完整的回答，不要额外元说明或重复题目。"""
@@ -72,6 +72,8 @@ def init_session_state():
         st.session_state.north_star = ""
     if "uploaded_df" not in st.session_state:
         st.session_state.uploaded_df = None
+    if "generation_prompt" not in st.session_state:
+        st.session_state.generation_prompt = ""
     if "generated_prompt" not in st.session_state:
         st.session_state.generated_prompt = ""
     if "evaluation_prompt" not in st.session_state:
@@ -107,14 +109,15 @@ def validate_csv(df: pd.DataFrame) -> tuple[bool, str]:
 
 def run_single_generation(
     question: str,
-    scenario: str,
-    north_star: str,
+    system_prompt: str,
     api_key: str,
     model: str,
 ) -> tuple[Optional[str], Optional[str]]:
-    """根据业务描述与北极星指标对单条题目生成回答。返回 (回答文本, 错误信息)。"""
+    """使用给定的生成 Prompt 对单条题目生成回答。返回 (回答文本, 错误信息)。"""
     if not (question or "").strip():
         return None, "题目为空"
+    if not (system_prompt or "").strip():
+        return None, "生成 Prompt 为空"
     prev = os.environ.get("DEEPSEEK_API_KEY")
     try:
         os.environ["DEEPSEEK_API_KEY"] = api_key
@@ -124,8 +127,7 @@ def run_single_generation(
             temperature=getattr(config, "DEEPSEEK_TEMPERATURE", 0.7),
             max_tokens=getattr(config, "DEEPSEEK_MAX_TOKENS", 4000),
         )
-        system_prompt = GENERATOR_SYSTEM_TEMPLATE.format(scenario=scenario, north_star=north_star)
-        answer = client.generate(system_prompt=system_prompt, user_prompt=(question or "").strip())
+        answer = client.generate(system_prompt=system_prompt.strip(), user_prompt=(question or "").strip())
         return (answer or "").strip(), None
     except Exception as e:
         return None, str(e)
@@ -280,7 +282,7 @@ def render_phase_config():
     st.divider()
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("生成回答", type="primary", use_container_width=True):
+        if st.button("下一步：生成 Prompt", type="primary", use_container_width=True):
             if not st.session_state.api_key.strip():
                 st.error("请在侧边栏填写 API Key。")
             elif not st.session_state.scenario.strip() or not st.session_state.north_star.strip():
@@ -288,7 +290,11 @@ def render_phase_config():
             elif st.session_state.uploaded_df is None or st.session_state.uploaded_df.empty:
                 st.error("请先上传包含 question 的 CSV 文件。")
             else:
-                st.session_state.phase = "GENERATING"
+                st.session_state.generation_prompt = GENERATOR_SYSTEM_TEMPLATE.format(
+                    scenario=st.session_state.scenario,
+                    north_star=st.session_state.north_star,
+                )
+                st.session_state.phase = "GENERATION_PROMPT_EDIT"
                 st.rerun()
     with col_btn2:
         has_answer = (
@@ -321,22 +327,48 @@ def render_phase_config():
                         st.error(f"生成评测方案失败（请检查 API Key 与网络）：{e}")
 
 
-# ==================== Phase 2: 生成回答 ====================
+# ==================== Phase 2: 生成 Prompt 确认（可编辑） ====================
+def render_phase_generation_prompt_edit():
+    st.subheader("阶段二：生成 Prompt 确认")
+    st.divider()
+    st.caption("根据测试场景与北极星指标已生成下方 Prompt，可直接修改后再生成回答。")
+
+    generation_prompt = st.text_area(
+        "生成 Prompt（可编辑）",
+        value=st.session_state.generation_prompt,
+        height=280,
+        help="用于调用模型生成回答的系统提示词，每条题目将作为用户输入传入。",
+    )
+    st.session_state.generation_prompt = generation_prompt
+
+    st.divider()
+    if st.button("确认并生成回答", type="primary", use_container_width=False):
+        if not (st.session_state.generation_prompt or "").strip():
+            st.error("请填写或保留生成 Prompt。")
+            return
+        st.session_state.phase = "GENERATING"
+        st.rerun()
+
+    if st.button("返回配置", use_container_width=False):
+        st.session_state.phase = "CONFIG"
+        st.rerun()
+
+
+# ==================== Phase 3: 生成回答 ====================
 def render_phase_generating():
-    st.subheader("阶段二：生成回答")
+    st.subheader("阶段三：生成回答")
     st.divider()
 
     df = st.session_state.uploaded_df
     n = len(df) if df is not None else 0
     api_key = st.session_state.api_key
     model = st.session_state.model
-    scenario = st.session_state.scenario
-    north_star = st.session_state.north_star
+    generation_prompt = st.session_state.generation_prompt
 
-    if not api_key or df is None or n == 0:
+    if not api_key or df is None or n == 0 or not (generation_prompt or "").strip():
         st.error("配置或数据不完整，请返回上一步。")
-        if st.button("返回配置"):
-            st.session_state.phase = "CONFIG"
+        if st.button("返回生成 Prompt"):
+            st.session_state.phase = "GENERATION_PROMPT_EDIT"
             st.rerun()
         return
 
@@ -355,7 +387,7 @@ def render_phase_generating():
                 df.at[idx, GENERATED_ANSWER_COLUMN] = ""
                 st.write("  ⏭ 题目为空，已跳过")
                 continue
-            answer, err = run_single_generation(q, scenario, north_star, api_key, model)
+            answer, err = run_single_generation(q, generation_prompt, api_key, model)
             if err:
                 df.at[idx, GENERATED_ANSWER_COLUMN] = ""
                 st.write(f"  ❌ {err}")
@@ -368,10 +400,21 @@ def render_phase_generating():
     st.session_state.uploaded_df = df
 
     st.divider()
+    st.subheader("生成结果（只读）")
+    st.caption("以下为根据当前生成 Prompt 得到的回答，仅供查看不可修改。")
+    if GENERATED_ANSWER_COLUMN in df.columns:
+        display_df = df[["question", GENERATED_ANSWER_COLUMN]].copy()
+        display_df.columns = ["题目", "生成回答"]
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.divider()
     if st.button("下一步：生成评测方案", type="primary", use_container_width=False):
         with st.spinner("正在根据场景与北极星指标生成评测方案…"):
             try:
-                prompt = generate_evaluator_prompt_in_app(scenario, north_star, api_key)
+                prompt = generate_evaluator_prompt_in_app(
+                    st.session_state.scenario,
+                    st.session_state.north_star,
+                    api_key,
+                )
                 st.session_state.generated_prompt = prompt
                 st.session_state.evaluation_prompt = prompt
                 st.session_state.phase = "PROMPT_EDIT"
@@ -381,9 +424,9 @@ def render_phase_generating():
                 st.error(f"生成评测方案失败：{e}")
 
 
-# ==================== Phase 3: 提示词确认 ====================
+# ==================== Phase 4: 评测提示词确认 ====================
 def render_phase_prompt_edit():
-    st.subheader("阶段三：提示词确认")
+    st.subheader("阶段四：评测提示词确认")
     st.divider()
 
     evaluation_prompt = st.text_area(
@@ -406,9 +449,9 @@ def render_phase_prompt_edit():
         st.rerun()
 
 
-# ==================== Phase 4: 执行评测 ====================
+# ==================== Phase 5: 执行评测 ====================
 def render_phase_evaluating():
-    st.subheader("阶段四：执行评测")
+    st.subheader("阶段五：执行评测")
     st.divider()
 
     df = st.session_state.uploaded_df
@@ -473,9 +516,9 @@ def render_phase_evaluating():
     st.rerun()
 
 
-# ==================== Phase 5: 结果展示 ====================
+# ==================== Phase 6: 结果展示 ====================
 def render_phase_result():
-    st.subheader("阶段五：结果展示")
+    st.subheader("阶段六：结果展示")
     st.divider()
 
     df = st.session_state.results_df
@@ -483,15 +526,16 @@ def render_phase_result():
         st.warning("暂无结果，请先完成评测。")
         return
 
-    valid = df[df["weighted_total_score"].notna()]
+    score_numeric = pd.to_numeric(df["weighted_total_score"], errors="coerce") if "weighted_total_score" in df.columns else pd.Series(dtype=float)
+    valid = df[score_numeric.notna()]
     n_valid = len(valid)
     n_total = len(df)
 
     st.caption("核心指标")
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        avg_score = valid["weighted_total_score"].mean() if n_valid else 0
-        st.metric("平均分", f"{avg_score:.1f}" if n_valid else "—")
+        avg_score = score_numeric.mean() if score_numeric.notna().any() else 0
+        st.metric("平均分", f"{avg_score:.1f}" if score_numeric.notna().any() else "—")
     with col2:
         pass_count = valid["pass"].sum() if "pass" in valid.columns else (valid["decision"] == "PUBLISH").sum()
         pass_rate = (pass_count / n_valid * 100) if n_valid else 0
@@ -509,15 +553,19 @@ def render_phase_result():
 
     if n_valid > 0 and "weighted_total_score" in df.columns:
         st.caption("得分分布")
-        score_counts = valid["weighted_total_score"].round(0).value_counts().sort_index()
-        fig = px.bar(
-            x=score_counts.index.astype(int),
-            y=score_counts.values,
-            labels={"x": "加权总分", "y": "条数"},
-            title="加权总分分布",
-        )
-        fig.update_layout(showlegend=False, margin=dict(t=40))
-        st.plotly_chart(fig, use_container_width=True)
+        score_series = pd.to_numeric(valid["weighted_total_score"], errors="coerce").dropna()
+        if len(score_series) > 0:
+            score_counts = score_series.round(0).value_counts().sort_index()
+            fig = px.bar(
+                x=score_counts.index.astype(int),
+                y=score_counts.values,
+                labels={"x": "加权总分", "y": "条数"},
+                title="加权总分分布",
+            )
+            fig.update_layout(showlegend=False, margin=dict(t=40))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("无有效数值得分，跳过得分分布图。")
     st.divider()
 
     st.caption("完整结果（含原题、回答、评分理由）")
@@ -542,12 +590,14 @@ def main():
     render_sidebar()
 
     st.title("📊 LLM 评测流水线")
-    st.caption("配置 → 生成回答 → 提示词确认 → 评测 → 结果展示")
+    st.caption("配置 → 生成 Prompt → 生成回答 → 评测提示词 → 评测 → 结果展示")
     st.divider()
 
     phase = st.session_state.phase
     if phase == "CONFIG":
         render_phase_config()
+    elif phase == "GENERATION_PROMPT_EDIT":
+        render_phase_generation_prompt_edit()
     elif phase == "GENERATING":
         render_phase_generating()
     elif phase == "PROMPT_EDIT":
