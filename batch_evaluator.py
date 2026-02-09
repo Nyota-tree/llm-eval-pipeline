@@ -88,6 +88,36 @@ def extract_evaluation(response_json: Dict[str, Any]) -> Dict[str, Any]:
             adherence_score = scores.get('adherence', scores.get('instruction_score', 0))
         if attractiveness_score == 0:
             attractiveness_score = scores.get('attractiveness', scores.get('quality_score', 0))
+        
+        # 按键名模糊匹配：遍历 scores 中所有键，含 factuality/safety 等则归入对应维度
+        if factuality_score == 0 or completeness_score == 0 or adherence_score == 0 or attractiveness_score == 0:
+            for key, value in scores.items():
+                if not isinstance(value, (int, float)):
+                    continue
+                try:
+                    v = float(value)
+                except (ValueError, TypeError):
+                    continue
+                key_lower = key.lower()
+                if "factuality" in key_lower or "safety" in key_lower or "安全" in key_lower or "事实" in key_lower:
+                    if factuality_score == 0:
+                        factuality_score = v
+                elif "completeness" in key_lower or "coverage" in key_lower or "完整" in key_lower:
+                    if completeness_score == 0:
+                        completeness_score = v
+                elif "adherence" in key_lower or "instruction" in key_lower or "compliance" in key_lower or "遵循" in key_lower:
+                    if adherence_score == 0:
+                        adherence_score = v
+                elif "attractiveness" in key_lower or "quality" in key_lower or "appeal" in key_lower or "吸引" in key_lower or "质量" in key_lower:
+                    if attractiveness_score == 0:
+                        attractiveness_score = v
+    
+    # 若 scores 内仍未取到有效小分，尝试从 JSON 顶层读取
+    if factuality_score == 0 and completeness_score == 0 and adherence_score == 0 and attractiveness_score == 0:
+        factuality_score = response_json.get('factuality_score', response_json.get('factuality', 0))
+        completeness_score = response_json.get('completeness_score', response_json.get('completeness', 0))
+        adherence_score = response_json.get('adherence_score', response_json.get('adherence', 0))
+        attractiveness_score = response_json.get('attractiveness_score', response_json.get('attractiveness', 0))
     
     # 确保分数是数值类型
     try:

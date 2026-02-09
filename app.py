@@ -1,6 +1,6 @@
 """
 LLM 评测流水线 - Streamlit 应用
-六阶段流程：配置 → 生成 Prompt 确认 → 生成回答 → 评测提示词确认 → 评测 → 结果展示
+六阶段流程：配置 → 业务 Prompt → 评估 Prompt → 生成回答 → 评测 → 结果展示
 """
 
 import io
@@ -385,14 +385,14 @@ def render_phase_config():
                         st.error(f"生成评测方案失败（请检查 API Key 与网络）：{e}")
 
 
-# ==================== Phase 2: 生成 Prompt 确认（可编辑） ====================
+# ==================== Phase 2: 业务 Prompt 确认（可编辑） ====================
 def render_phase_generation_prompt_edit():
-    st.subheader("阶段二：生成 Prompt 确认")
+    st.subheader("阶段二：业务 Prompt 确认")
     st.divider()
-    st.caption("根据测试场景与北极星指标已生成下方 Prompt，可直接修改后再生成回答。")
+    st.caption("根据业务场景与北极星指标已生成下方业务提示词，可编辑。确认后进入下一步生成「评估 Prompt」。")
 
     generation_prompt = st.text_area(
-        "生成 Prompt（可编辑）",
+        "业务 Prompt（可编辑）",
         value=st.session_state.generation_prompt,
         height=280,
         help="用于调用模型生成回答的系统提示词，每条题目将作为用户输入传入。",
@@ -400,21 +400,33 @@ def render_phase_generation_prompt_edit():
     st.session_state.generation_prompt = generation_prompt
 
     st.divider()
-    if st.button("确认并生成回答", type="primary", use_container_width=False):
+    if st.button("下一步：生成评估 Prompt", type="primary", use_container_width=False):
         if not (st.session_state.generation_prompt or "").strip():
-            st.error("请填写或保留生成 Prompt。")
+            st.error("请填写或保留业务 Prompt。")
             return
-        st.session_state.phase = "GENERATING"
-        st.rerun()
+        with st.spinner("正在根据场景与北极星指标生成评估 Prompt…"):
+            try:
+                prompt = generate_evaluator_prompt_in_app(
+                    st.session_state.scenario,
+                    st.session_state.north_star,
+                    st.session_state.api_key,
+                )
+                st.session_state.generated_prompt = prompt
+                st.session_state.evaluation_prompt = prompt
+                st.session_state.phase = "PROMPT_EDIT"
+                st.success("评估 Prompt 已生成，请确认并编辑下方提示词，再开始处理数据。")
+                st.rerun()
+            except Exception as e:
+                st.error(f"生成评估 Prompt 失败（请检查 API Key 与网络）：{e}")
 
     if st.button("返回配置", use_container_width=False):
         st.session_state.phase = "CONFIG"
         st.rerun()
 
 
-# ==================== Phase 3: 生成回答 ====================
+# ==================== Phase 4: 生成回答 ====================
 def render_phase_generating():
-    st.subheader("阶段三：生成回答")
+    st.subheader("阶段四：生成回答")
     st.divider()
 
     df = st.session_state.uploaded_df
@@ -425,8 +437,8 @@ def render_phase_generating():
 
     if not api_key or df is None or n == 0 or not (generation_prompt or "").strip():
         st.error("配置或数据不完整，请返回上一步。")
-        if st.button("返回生成 Prompt"):
-            st.session_state.phase = "GENERATION_PROMPT_EDIT"
+        if st.button("返回评估 Prompt"):
+            st.session_state.phase = "PROMPT_EDIT"
             st.rerun()
         return
 
@@ -438,7 +450,7 @@ def render_phase_generating():
     if rows_with_question > 0 and GENERATED_ANSWER_COLUMN in df.columns:
         filled = (df[GENERATED_ANSWER_COLUMN].notna() & (df[GENERATED_ANSWER_COLUMN].astype(str).str.strip() != "")).sum()
         if filled >= rows_with_question:
-            st.caption("生成已完成，可直接点击下方「下一步：生成评测方案」。")
+            st.caption("生成已完成，可直接点击下方「下一步：开始评测」。")
             st.session_state.uploaded_df = df
             # 跳转到下方的「生成结果 + 下一步」展示，不执行下面的 for 循环
             _render_generation_result_and_next(df, api_key)
@@ -473,41 +485,30 @@ def render_phase_generating():
 
 
 def _render_generation_result_and_next(df: pd.DataFrame, api_key: str):
-    """展示生成结果（只读）与「下一步：生成评测方案」按钮。"""
+    """展示生成结果（只读）与「下一步：开始评测」按钮（评估 Prompt 已在前面步骤生成并确认）。"""
     st.subheader("生成结果（只读）")
-    st.caption("以下为根据当前生成 Prompt 得到的回答，仅供查看不可修改。")
+    st.caption("以下为根据当前业务 Prompt 得到的回答，仅供查看不可修改。确认后点击「下一步：开始评测」。")
     if GENERATED_ANSWER_COLUMN in df.columns:
         display_df = df[["question", GENERATED_ANSWER_COLUMN]].copy()
         display_df.columns = ["题目", "生成回答"]
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     st.divider()
-    if st.button("下一步：生成评测方案", type="primary", use_container_width=False):
-        with st.spinner("正在根据场景与北极星指标生成评测方案…"):
-            try:
-                prompt = generate_evaluator_prompt_in_app(
-                    st.session_state.scenario,
-                    st.session_state.north_star,
-                    api_key,
-                )
-                st.session_state.generated_prompt = prompt
-                st.session_state.evaluation_prompt = prompt
-                st.session_state.phase = "PROMPT_EDIT"
-                st.success("评测方案已生成，请确认并编辑下方提示词。")
-                st.rerun()
-            except Exception as e:
-                st.error(f"生成评测方案失败：{e}")
+    if st.button("下一步：开始评测", type="primary", use_container_width=False):
+        st.session_state.phase = "EVALUATING"
+        st.rerun()
 
 
-# ==================== Phase 4: 评测提示词确认 ====================
+# ==================== Phase 3: 评估 Prompt 确认（可编辑） ====================
 def render_phase_prompt_edit():
-    st.subheader("阶段四：评测提示词确认")
+    st.subheader("阶段三：评估 Prompt 确认")
     st.divider()
+    st.caption("上一步已生成评估用提示词，可编辑。确认后进入「处理数据」：先生成回答，再执行评测。")
 
     evaluation_prompt = st.text_area(
-        "评测 System Prompt（可编辑）",
+        "评估 Prompt（可编辑）",
         value=st.session_state.evaluation_prompt,
         height=320,
-        help="可根据需要修改生成的评测标准",
+        help="可根据需要修改生成的评测标准；须包含占位符 {original_text} 与 {model_output}。",
     )
     st.session_state.evaluation_prompt = evaluation_prompt
 
@@ -515,11 +516,15 @@ def render_phase_prompt_edit():
         st.warning("提示词中建议包含占位符 `{original_text}` 与 `{model_output}`，以便对每条题目进行评测。")
 
     st.divider()
-    if st.button("确认并开始评测", type="primary", use_container_width=False):
+    if st.button("确认并开始处理数据", type="primary", use_container_width=False):
         if not st.session_state.evaluation_prompt.strip():
-            st.error("请填写或保留评测提示词。")
+            st.error("请填写或保留评估提示词。")
             return
-        st.session_state.phase = "EVALUATING"
+        st.session_state.phase = "GENERATING"
+        st.rerun()
+
+    if st.button("返回业务 Prompt", use_container_width=False):
+        st.session_state.phase = "GENERATION_PROMPT_EDIT"
         st.rerun()
 
 
@@ -642,15 +647,51 @@ def render_phase_result():
             st.caption("无有效数值得分，跳过得分分布图。")
     st.divider()
 
+    # 本次使用的 Prompt（供核查）
+    st.caption("本次使用的 Prompt（供核查）")
+    with st.expander("业务 Prompt（生成回答时使用）", expanded=False):
+        gen_prompt = st.session_state.get("generation_prompt") or ""
+        st.text_area("业务 Prompt", value=gen_prompt, height=200, disabled=True, label_visibility="collapsed")
+    with st.expander("评估 Prompt（评测时使用）", expanded=False):
+        eval_prompt = st.session_state.get("evaluation_prompt") or ""
+        st.text_area("评估 Prompt", value=eval_prompt, height=280, disabled=True, label_visibility="collapsed")
+    st.divider()
+
+    # 各维度小分一览（优先展示，避免小分被忽略）
+    score_cols = ["factuality_score", "completeness_score", "adherence_score", "attractiveness_score", "weighted_total_score"]
+    existing_score_cols = [c for c in score_cols if c in df.columns]
+    if existing_score_cols:
+        st.caption("各维度小分")
+        labels = ["事实性/安全性", "完整性", "遵循度", "吸引力", "加权总分"][: len(existing_score_cols)]
+        score_df = df[existing_score_cols].copy()
+        score_df.columns = labels
+        st.dataframe(score_df, use_container_width=True, hide_index=True, column_config={lb: st.column_config.NumberColumn(lb, format="%.1f") for lb in labels})
+        st.divider()
+
     st.caption("完整结果（含原题、回答、各维度小分、总分、决策与理由）")
-    st.caption("说明：REJECT 表示「事实性/安全性」分数低于阈值（0–10 分制低于 5 分，或 0–100 分制低于 50 分），与总分无关；请在下方表格中查看各维度小分。")
+    st.caption("说明：REJECT 表示「事实性/安全性」分数低于阈值（0–10 分制低于 5 分，或 0–100 分制低于 50 分），与总分无关。")
     display_cols = [
         "question", GENERATED_ANSWER_COLUMN, OPTIONAL_ANSWER_COLUMN,
         "factuality_score", "completeness_score", "adherence_score", "attractiveness_score",
         "weighted_total_score", "decision", "reason", "reasoning",
     ]
     display_cols = [c for c in display_cols if c in df.columns]
-    st.dataframe(df[display_cols] if display_cols else df, use_container_width=True, hide_index=True)
+    col_config = {}
+    for col, label in [
+        ("factuality_score", "事实性"),
+        ("completeness_score", "完整性"),
+        ("adherence_score", "遵循度"),
+        ("attractiveness_score", "吸引力"),
+        ("weighted_total_score", "加权总分"),
+    ]:
+        if col in display_cols:
+            col_config[col] = st.column_config.NumberColumn(label, format="%.1f")
+    st.dataframe(
+        df[display_cols] if display_cols else df,
+        use_container_width=True,
+        hide_index=True,
+        column_config=col_config if col_config else None,
+    )
 
     st.divider()
     buf = io.BytesIO()
@@ -669,7 +710,7 @@ def main():
     render_sidebar()
 
     st.title("📊 LLM 评测流水线")
-    st.caption("配置 → 生成 Prompt → 生成回答 → 评测提示词 → 评测 → 结果展示")
+    st.caption("配置 → 业务 Prompt → 评估 Prompt → 生成回答 → 评测 → 结果展示")
     st.divider()
 
     phase = st.session_state.phase
