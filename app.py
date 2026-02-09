@@ -433,10 +433,10 @@ def render_phase_generating():
     n = len(df) if df is not None else 0
     api_key = st.session_state.api_key
     model = st.session_state.model
-    generation_prompt = st.session_state.generation_prompt
+    generation_prompt = (st.session_state.generation_prompt or "").strip()
 
-    if not api_key or df is None or n == 0 or not (generation_prompt or "").strip():
-        st.error("配置或数据不完整，请返回上一步。")
+    if not api_key or df is None or n == 0:
+        st.error("配置或数据不完整，请返回上一步。（请确认侧边栏已填 API Key 且已上传含 question 的 CSV）")
         if st.button("返回评估 Prompt"):
             st.session_state.phase = "PROMPT_EDIT"
             st.rerun()
@@ -445,16 +445,31 @@ def render_phase_generating():
     if GENERATED_ANSWER_COLUMN not in df.columns:
         df[GENERATED_ANSWER_COLUMN] = None
 
-    # 若所有有题目的行已有生成回答，则不再重新生成，直接展示结果与「下一步」（避免点击「生成评测方案」后 rerun 时又跑一遍）
-    rows_with_question = (df["question"].notna() & df["question"].astype(str).str.strip() != "").sum()
-    if rows_with_question > 0 and GENERATED_ANSWER_COLUMN in df.columns:
-        filled = (df[GENERATED_ANSWER_COLUMN].notna() & (df[GENERATED_ANSWER_COLUMN].astype(str).str.strip() != "")).sum()
-        if filled >= rows_with_question:
-            st.caption("生成已完成，可直接点击下方「下一步：开始评测」。")
-            st.session_state.uploaded_df = df
-            # 跳转到下方的「生成结果 + 下一步」展示，不执行下面的 for 循环
-            _render_generation_result_and_next(df, api_key)
-            return
+    # 有题目的行：若已有 generated_answer 或 expected_answer 任一非空，视为「已有回答」
+    def _has_answer(row):
+        gen = str(row.get(GENERATED_ANSWER_COLUMN) or "").strip()
+        exp = str(row.get(OPTIONAL_ANSWER_COLUMN) or "").strip() if OPTIONAL_ANSWER_COLUMN in df.columns else ""
+        return bool(gen or exp)
+
+    has_question = df["question"].notna() & (df["question"].astype(str).str.strip() != "")
+    has_answer = df.apply(_has_answer, axis=1)
+    rows_with_question = has_question.sum()
+    rows_need_generation = (has_question & ~has_answer).sum()
+
+    # 若需要生成但未配置业务 Prompt，才报错（自己上传回答时无需业务 Prompt）
+    if rows_need_generation > 0 and not generation_prompt:
+        st.error("配置或数据不完整，请返回上一步。（当前有题目尚无回答，需在阶段二配置「业务 Prompt」后再进入本阶段；或为这些题目在上传的 CSV 中填写 expected_answer）")
+        if st.button("返回评估 Prompt"):
+            st.session_state.phase = "PROMPT_EDIT"
+            st.rerun()
+        return
+
+    # 若所有有题目的行已有回答（自己上传的 expected_answer 或已有 generated_answer），直接进入「下一步」
+    if rows_with_question > 0 and rows_need_generation == 0:
+        st.caption("数据中已包含回答（generated_answer 或 expected_answer），可直接点击下方「下一步：开始评测」。")
+        st.session_state.uploaded_df = df
+        _render_generation_result_and_next(df, api_key)
+        return
 
     progress_bar = st.progress(0.0, text="准备中…")
     status = st.status("生成回答中…", expanded=True)
@@ -487,11 +502,16 @@ def render_phase_generating():
 def _render_generation_result_and_next(df: pd.DataFrame, api_key: str):
     """展示生成结果（只读）与「下一步：开始评测」按钮（评估 Prompt 已在前面步骤生成并确认）。"""
     st.subheader("生成结果（只读）")
-    st.caption("以下为根据当前业务 Prompt 得到的回答，仅供查看不可修改。确认后点击「下一步：开始评测」。")
-    if GENERATED_ANSWER_COLUMN in df.columns:
-        display_df = df[["question", GENERATED_ANSWER_COLUMN]].copy()
-        display_df.columns = ["题目", "生成回答"]
-        st.dataframe(display_df, width="stretch", hide_index=True)
+    st.caption("以下为将用于评测的回答（生成回答或上传的预期回答）。确认后点击「下一步：开始评测」。")
+    # 用于评测的回答列：优先 generated_answer，否则 expected_answer
+    answer_series = df.apply(
+        lambda r: str(r.get(GENERATED_ANSWER_COLUMN) or r.get(OPTIONAL_ANSWER_COLUMN) or ""),
+        axis=1,
+    )
+    display_df = df[["question"]].copy()
+    display_df.columns = ["题目"]
+    display_df["回答"] = answer_series
+    st.dataframe(display_df, width="stretch", hide_index=True)
     st.divider()
     if st.button("下一步：开始评测", type="primary", width="content"):
         st.session_state.phase = "EVALUATING"
